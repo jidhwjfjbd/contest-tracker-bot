@@ -1,4 +1,4 @@
-Flask
-requests
-psycopg2-binary
-gunicorn
+aiogram==3.17.0
+Flask==3.1.0
+requests==2.32.3
+supabase==2.12.0
