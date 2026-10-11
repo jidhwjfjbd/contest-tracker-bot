@@ -1,5 +1,3 @@
-إليك التعديل على قالب الرسالة ليطابق النموذج الذي طلبته تماماً وبصياغة عربية جذابة وواضحة:
-💻 الكود المحدث بالكامل مع صيغة الرسالة الجديدة:
 import os
 import time
 import asyncio
@@ -85,7 +83,6 @@ def save_to_database(contest_id, status):
         print(f"Supabase save error: {e}")
 
 async def publish_to_channel(contest_id, time_left="قريباً"):
-    """نشر المسابقة بالقالب الجديد المطلوب"""
     text = (
         f"🎁 **مسابقة جديدة قيد انتضارك**\n\n"
         f"⏳ تبقى **{time_left}** على نهاية المسابقة\n\n"
@@ -106,7 +103,6 @@ def background_scanner():
     
     while True:
         try:
-            # 1. فحص المسابقة بالرقم الرئيسي الحالي
             url = f"https://t.me/Randombot?start=raffle_{current_id}"
             html_content = fetch_page_content(url)
             status = check_contest_status(html_content)
@@ -125,7 +121,6 @@ def background_scanner():
                     upcoming_queue.append({"id": current_id, "url": url})
                 current_id += 1
                 
-            # 2. فحص طابور المراقبة (الـ 10 روابط) وتحديث حالاتها
             for item in list(upcoming_queue):
                 item_content = fetch_page_content(item['url'])
                 item_status = check_contest_status(item_content)
@@ -139,7 +134,6 @@ def background_scanner():
                     save_to_database(item['id'], item_status)
                     upcoming_queue.remove(item)
                     
-            # 3. تعويض الروابط المنتهية أو المحذوفة للحفاظ على 10 روابط في الطابور
             while len(upcoming_queue) < 10:
                 new_url = f"https://t.me/Randombot?start=raffle_{current_id}"
                 new_content = fetch_page_content(new_url)
@@ -158,7 +152,6 @@ def background_scanner():
                 else:
                     current_id += 1
                     
-            # الانتظار لمدة دقيقة كاملة (60 ثانية) قبل الدورة التالية
             time.sleep(60)
             
         except Exception as e:
