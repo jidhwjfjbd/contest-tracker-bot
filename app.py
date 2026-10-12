@@ -5,14 +5,15 @@ import requests
 
 TOKEN = os.getenv("BOT_TOKEN", "8938116145:AAHkVV0geUtkdOh04pZgdzQpxL0qVchO6Io")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@neoearnboot")
-REF_LINK = os.getenv("REF_LINK", "https://t.me/DRAGON_STONE_BOT?start=ref_8557464787")
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 admin_current_id = 894
-# تخزين الخطوات مع بيانات المسابقة لكل مستخدم
 user_steps = {}
+
+# قائمة لتخزين جميع المستخدمين الذين تفاعلوا مع البوت لترسل لهم التنبيهات الجماعية
+bot_users = set()
 
 def send_telegram_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -34,6 +35,12 @@ def webhook():
     if request.headers.get('content-type') == 'application/json':
         data = request.get_json()
         
+        # حفظ أي مستخدم يتفاعل مع البوت في قائمة المستلمين
+        if "message" in data:
+            bot_users.add(data["message"]["chat"]["id"])
+        elif "callback_query" in data:
+            bot_users.add(data["callback_query"]["message"]["chat"]["id"])
+            
         # معالجة الأزرار التفاعلية
         if "callback_query" in data:
             cq = data["callback_query"]
@@ -81,7 +88,7 @@ def webhook():
                 "chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown", "reply_markup": markup
             })
 
-        # معالجة الرسائل النصية والفيديوهات حسب الخطوة الحالية
+        # معالجة الرسائل النصية والفيديوهات
         elif "message" in data:
             msg = data["message"]
             chat_id = msg["chat"]["id"]
@@ -137,10 +144,10 @@ def webhook():
                     video_id = state_data.get("video_id")
                     prizes = state_data.get("prizes")
                     
-                    # إعادة ضبط الحالة
                     user_steps[chat_id] = {}
                     
-                    # صياغة المنشور للقناة
+                    approved_contest_link = f"https://t.me/Randomalbot?startapp=contest_{contest_id}__r8557464787"
+                    
                     caption = (
                         f"🎁 **مسابقة جديدة قيد انتضارك**\n\n"
                         f"🏆 **التفاصيل والجوائز:**\n{prizes}\n\n"
@@ -149,22 +156,34 @@ def webhook():
                     )
                     keyboard = {
                         "inline_keyboard": [
-                            [{"text": "🚀 شارك في السحب الآن", "url": REF_LINK}]
+                            [{"text": "🚀 شارك في السحب الآن", "url": approved_contest_link}]
                         ]
                     }
                     
-                    # 1. إرسال الفيديو مع التفاصيل إلى القناة
+                    # 1. النشر في القناة
                     send_telegram_video(CHANNEL_ID, video_id, caption, keyboard)
                     
-                    # 2. إرسال رسالة الإشعار الجماعية في القناة
-                    broadcast_text = (
+                    # 2. إرسال التنبيه لجميع أعضاء ومستخدمي البوت داخل خاص البوت
+                    user_notification = (
                         f"🚨 **تنبيه مسابقة جديدة!**\n\n"
-                        f"تم إطلاق مسابقة جديدة رقم #{contest_id} في القناة، سارع بالمشاركة الآن! 🔥"
+                        f"تم إطلاق مسابقة جديدة رقم #{contest_id}، سارع بالمشاركة فوراً! 🔥\n\n"
+                        f"🏆 **الجوائز:** {prizes}\n"
+                        f"⏳ **الوقت المتبقي:** {time_left}"
                     )
-                    send_telegram_message(CHANNEL_ID, broadcast_text)
+                    user_keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "🚀 شارك في المسابقة الآن", "url": approved_contest_link}]
+                        ]
+                    }
                     
-                    # تأكيد للأدمن
-                    send_telegram_message(chat_id, "✅ **تم نشر المسابقة والفيديو بنجاح في القناة!**\n\nاكتب /admin للعودة للوحة التحكم.")
+                    # حلقة تكرارية للإرسال لكل مستخدمي البوت
+                    for user_id in bot_users:
+                        try:
+                            send_telegram_message(user_id, user_notification, user_keyboard)
+                        except Exception:
+                            pass # في حال قام مستخدم بحظر البوت لا تتوقف العملية
+
+                    send_telegram_message(chat_id, "✅ **تم نشر المسابقة في القناة وإرسال التنبيه لجميع مستخدمي البوت بنجاح!**\n\nاكتب /admin للعودة للوحة التحكم.")
 
         return '', 200
     return 'OK', 200
