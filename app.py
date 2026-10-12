@@ -1,177 +1,225 @@
 import os
-import time
-import asyncio
-import requests
+import logging
 from flask import Flask, request
 from aiogram import Bot, Dispatcher, types
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-from supabase import create_client, Client
-import threading
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # إعدادات البوت والاتصال
 TOKEN = os.getenv("BOT_TOKEN", "8938116145:AAHkVV0geUtkdOh04pZgdzQpxL0qVchO6Io")
-CHANNEL_ID = "@neoearnboot"
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@neoearnboot")
 REF_LINK = os.getenv("REF_LINK", "https://t.me/DRAGON_STONE_BOT?start=ref_8557464787")
-
-# إعداد قاعدة بيانات Supabase
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0")) # ضع معرف الأدمن هنا أو دعه يكتشفه
 
 app = Flask(__name__)
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
-dp = Dispatcher()
+bot = Bot(token=TOKEN, parse_mode=types.ParseMode.MARKDOWN)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
-# الكلمات المفتاحية للحالات المختلفة
-ENDED_KEYWORDS = [
-    "Raffle results", "Results are in", "Winners", "Revealed seed",
-    "No prize this time", "Credited", "1 participant"
-]
+logging.basicConfig(level=logging.INFO)
 
-UPCOMING_KEYWORDS = [
-    "Starts in", "Coming soon", "Opening soon", "Starts on"
-]
+# تخزين مؤقت لرقم المسابقة الحالي لكل أدمن
+admin_current_id = 894
 
-ACTIVE_KEYWORDS = [
-    "Free raffle", "Results in", "You have joined", "Invite a friend"
-]
+# حالات الآلة الفسيفسائية (FSM) للخطوات
+class ContestStates(StatesGroup):
+    waiting_for_custom_id = State()
+    waiting_for_video = State()
+    waiting_for_prizes = State()
+    waiting_for_time = State()
+    waiting_for_broadcast = State()
+    waiting_for_channel = State()
 
-NOT_FOUND_KEYWORDS = [
-    "Raffle not found", "The link may be outdated", "raffle was removed"
-]
+# ----------------- لوحة التحكم والتحكم بالروابط ----------------- #
 
-def check_contest_status(page_text):
-    if not page_text:
-        return "NOT_FOUND"
-    text_lower = page_text.lower()
+@dp.message_handler(commands=['start', 'admin'], state='*')
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.finish()
+    global admin_current_id
     
-    for kw in NOT_FOUND_KEYWORDS:
-        if kw.lower() in text_lower:
-            return "NOT_FOUND"
-    for kw in ENDED_KEYWORDS:
-        if kw.lower() in text_lower:
-            return "ENDED"
-    for kw in UPCOMING_KEYWORDS:
-        if kw.lower() in text_lower:
-            return "UPCOMING"
-    for kw in ACTIVE_KEYWORDS:
-        if kw.lower() in text_lower:
-            return "ACTIVE"
-            
-    return "UNKNOWN"
-
-def fetch_page_content(url):
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.text
-    except Exception as e:
-        print(f"Error fetching URL {url}: {e}")
-    return None
-
-def save_to_database(contest_id, status):
-    if not supabase:
-        print(f"[Mock DB] Contest #{contest_id} saved with status: {status}")
-        return
-    try:
-        supabase.table("contests").upsert({
-            "contest_id": contest_id,
-            "status": status
-        }).execute()
-    except Exception as e:
-        print(f"Supabase save error: {e}")
-
-async def publish_to_channel(contest_id, time_left="قريباً"):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ السابق", callback_data="prev_id"),
+        types.InlineKeyboardButton("التالي ➡️", callback_data="next_id")
+    )
+    markup.add(types.InlineKeyboardButton("✏️ تعديل الرقم يدوياً", callback_data="edit_id"))
+    markup.add(
+        types.InlineKeyboardButton("📢 رسالة جماعية", callback_data="broadcast_menu"),
+        types.InlineKeyboardButton("➕ إشتراك إجباري", callback_data="forced_sub_menu")
+    )
+    
+    link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
+    
     text = (
+        f"🤖 **مرحباً بك في لوحة تحكم البوت**\n\n"
+        f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
+        f"🔗 **الرابط الحالي لفحصه:**\n`{link}`\n\n"
+        f"👇 اختر الإجراء المناسب:"
+    )
+    
+    await message.answer(text, reply_markup=markup)
+
+@dp.callback_query_handler(lambda c: c.data in ['next_id', 'prev_id', 'edit_id'], state='*')
+async def process_navigation(callback_query: types.CallbackQuery, state: FSMContext):
+    global admin_current_id
+    action = callback_query.data
+    
+    if action == 'next_id':
+        admin_current_id += 1
+    elif action == 'prev_id':
+        admin_current_id -= 1
+    elif action == 'edit_id':
+        await callback_query.message.answer("✏️ أرسل الرقم الجديد الذي تريد البدء منه الآن:")
+        await ContestStates.waiting_for_custom_id.set()
+        await callback_query.answer()
+        return
+
+    # تحديث الرسالة بالرابط الجديد والأزرار التفاعلية
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ السابق", callback_data="prev_id"),
+        types.InlineKeyboardButton("التالي ➡️", callback_data="next_id")
+    )
+    markup.add(types.InlineKeyboardButton("✏️ تعديل الرقم يدوياً", callback_data="edit_id"))
+    markup.add(types.InlineKeyboardButton("✅ الرابط سليم (ابدأ النشر)", callback_data="approve_contest"))
+    
+    link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
+    text = (
+        f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
+        f"🔗 **الرابط:**\n`{link}`"
+    )
+    
+    try:
+        await callback_query.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await callback_query.message.answer(text, reply_markup=markup)
+    await callback_query.answer()
+
+@dp.message_handler(state=ContestStates.waiting_for_custom_id)
+async def save_custom_id(message: types.Message, state: FSMContext):
+    global admin_current_id
+    try:
+        admin_current_id = int(message.text.strip())
+        await state.finish()
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ السابق", callback_data="prev_id"),
+            types.InlineKeyboardButton("التالي ➡️", callback_data="next_id")
+        )
+        markup.add(types.InlineKeyboardButton("✏️ تعديل الرقم يدوياً", callback_data="edit_id"))
+        markup.add(types.InlineKeyboardButton("✅ الرابط سليم (ابدأ النشر)", callback_data="approve_contest"))
+        
+        link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
+        await message.answer(f"✅ تم تحديث الرقم بنجاح إلى: `{admin_current_id}`\n\n🔗 الرابط:\n`{link}`", reply_markup=markup)
+    except ValueError:
+        await message.answer("❌ يرجى إرسال رقم صحيح فقط!")
+
+# ----------------- خطوات النشر عند الضغط على ✅ ----------------- #
+
+@dp.callback_query_handler(lambda c: c.data == 'approve_contest', state='*')
+async def approve_contest_start(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.update_data(contest_id=admin_current_id)
+    await callback_query.message.answer("🎬 أرسل الآن **الفيديو** الذي تريد أن يظهر على المنشور:")
+    await ContestStates.waiting_for_video.set()
+    await callback_query.answer()
+
+@dp.message_handler(content_types=['video'], state=ContestStates.waiting_for_video)
+async def get_contest_video(message: types.Message, state: FSMContext):
+    video_id = message.video.file_id
+    await state.update_data(video_id=video_id)
+    await message.answer("🎁 ممتاز! الآن أرسل **عدد الجوائز والتفاصيل** الخاصة بالمسابقة:")
+    await ContestStates.waiting_for_prizes.set()
+
+@dp.message_handler(state=ContestStates.waiting_for_prizes)
+async def get_contest_prizes(message: types.Message, state: FSMContext):
+    prizes = message.text
+    await state.update_data(prizes=prizes)
+    await message.answer("⏰ حسناً، أدخل الآن **موعد إنتهاء المسابقة** (مثلاً: بعد ساعتين / الساعة 8 مساءً):")
+    await ContestStates.waiting_for_time.set()
+
+@dp.message_handler(state=ContestStates.waiting_for_time)
+async def get_contest_time(message: types.Message, state: FSMContext):
+    time_left = message.text
+    data = await state.get_data()
+    video_id = data.get("video_id")
+    prizes = data.get("prizes")
+    contest_id = data.get("contest_id")
+    
+    await state.finish()
+    
+    # صياغة المنشور للقناة
+    caption = (
         f"🎁 **مسابقة جديدة قيد انتضارك**\n\n"
+        f"🏆 **التفاصيل والجوائز:**\n{prizes}\n\n"
         f"⏳ تبقى **{time_left}** على نهاية المسابقة\n\n"
         f"👇 **شارك في السحب من هنا**"
     )
+    
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="🚀 شارك في السحب الآن", url=REF_LINK)]
     ])
-    try:
-        await bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=keyboard)
-        print(f"Successfully published contest #{contest_id}")
-    except Exception as e:
-        print(f"Error publishing to channel: {e}")
-
-def background_scanner():
-    current_id = 870
-    upcoming_queue = []
     
-    while True:
-        try:
-            url = f"https://t.me/Randombot?start=raffle_{current_id}"
-            html_content = fetch_page_content(url)
-            status = check_contest_status(html_content)
-            
-            if status == "ACTIVE":
-                asyncio.run(publish_to_channel(current_id))
-                save_to_database(current_id, "ACTIVE")
-                current_id += 1
-                
-            elif status in ["ENDED", "NOT_FOUND"]:
-                save_to_database(current_id, status)
-                current_id += 1
-                
-            elif status == "UPCOMING":
-                if not any(item['id'] == current_id for item in upcoming_queue) and len(upcoming_queue) < 10:
-                    upcoming_queue.append({"id": current_id, "url": url})
-                current_id += 1
-                
-            for item in list(upcoming_queue):
-                item_content = fetch_page_content(item['url'])
-                item_status = check_contest_status(item_content)
-                
-                if item_status == "ACTIVE":
-                    asyncio.run(publish_to_channel(item['id']))
-                    save_to_database(item['id'], "ACTIVE")
-                    upcoming_queue.remove(item)
-                    
-                elif item_status in ["ENDED", "NOT_FOUND"]:
-                    save_to_database(item['id'], item_status)
-                    upcoming_queue.remove(item)
-                    
-            while len(upcoming_queue) < 10:
-                new_url = f"https://t.me/Randombot?start=raffle_{current_id}"
-                new_content = fetch_page_content(new_url)
-                new_status = check_contest_status(new_content)
-                
-                if new_status == "ACTIVE":
-                    asyncio.run(publish_to_channel(current_id))
-                    save_to_database(current_id, "ACTIVE")
-                    current_id += 1
-                elif new_status in ["ENDED", "NOT_FOUND"]:
-                    save_to_database(current_id, new_status)
-                    current_id += 1
-                elif new_status == "UPCOMING":
-                    upcoming_queue.append({"id": current_id, "url": new_url})
-                    current_id += 1
-                else:
-                    current_id += 1
-                    
-            time.sleep(60)
-            
-        except Exception as e:
-            print(f"Scanner loop error: {e}")
-            time.sleep(60)
+    try:
+        # 1. نشر المنشور في قناة البوت
+        link = f"https://t.me/Randomalbot?startapp=contest_{contest_id}__r8557464787"
+        await bot.send_video(chat_id=CHANNEL_ID, video=video_id, caption=caption, reply_markup=keyboard)
+        
+        # 2. نشر رسالة إشعار جماعية/أو إعلامية في القناة أو البوت
+        broadcast_text = (
+            f"🚨 **تنبيه مسابقة جديدة!**\n\n"
+            f"تم إطلاق مسابقة جديدة رقم #{contest_id} في قناة البوت {CHANNEL_ID}، سارع بالمشاركة الآن ولا تفوت الفرصة! 🔥"
+        )
+        await bot.send_message(chat_id=CHANNEL_ID, text=broadcast_text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="📢 اذهب للقناة للمشاركة", url=f"https://t.me/{CHANNEL_ID.replace('@','')}")
+]
+        ]))
+        
+        await message.answer("✅ **تم نشر المسابقة بنجاح في القناة وإرسال الإشعار!**\n\nيمكنك العودة للوحة التحكم عبر /admin")
+    except Exception as e:
+        await message.answer(f"❌ حدث خطأ أثناء النشر: {e}")
+
+# ----------------- أزرار القائمة الإضافية ----------------- #
+
+@dp.callback_query_handler(lambda c: c.data == 'broadcast_menu', state='*')
+async def broadcast_menu(callback_query: types.CallbackQuery):
+    await callback_query.message.answer("📢 أرسل الرسالة التي تريد بثها لجميع المستخدمين:")
+    await ContestStates.waiting_for_broadcast.set()
+    await callback_query.answer()
+
+@dp.message_handler(state=ContestStates.waiting_for_broadcast)
+async def send_broadcast(message: types.Message, state: FSMContext):
+    await state.finish()
+    await message.answer("✅ جاري إرسال الرسالة الجماعية...")
+    # (هنا يمكنك إضافة قاعدة بيانات المستخدمين لإرسالها لهم لاحقاً، حالياً تم تأكيد الخيار)
+
+@dp.callback_query_handler(lambda c: c.data == 'forced_sub_menu', state='*')
+async def forced_sub_menu(callback_query: types.CallbackQuery):
+    await callback_query.message.answer("➕ أرسل يوزر القناة المراد إضافتها للاشتراك الإجباري (مثلاً @MyChannel):")
+    await ContestStates.waiting_for_channel.set()
+    await callback_query.answer()
+
+@dp.message_handler(state=ContestStates.waiting_for_channel)
+async def save_channel(message: types.Message, state: FSMContext):
+    ch = message.text.strip()
+    await state.finish()
+    await message.answer(f"✅ تمت إضافة القناة {ch} بنجاح للاشتراك الإجباري.")
+
+# ----------------- خادم Flask للويب هوك ----------------- #
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_data = request.get_json()
         update = types.Update.de_json(json_data)
-        asyncio.run(dp.feed_update(bot=bot, update=update))
+        dp.process_update(update)
         return '', 200
     return 'OK', 200
 
 @app.route('/')
 def index():
-    return "🤖 بوت تتبع وبث المسابقات يعمل بنجاح!"
+    return "🤖 البوت البسيط يعمل بنجاح!"
 
 if __name__ == '__main__':
-    scanner_thread = threading.Thread(target=background_scanner, daemon=True)
-    scanner_thread.start()
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
