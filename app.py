@@ -1,19 +1,65 @@
 import os
+import sqlite3
 import logging
 from flask import Flask, request
 import requests
 
 TOKEN = os.getenv("BOT_TOKEN", "8938116145:AAHkVV0geUtkdOh04pZgdzQpxL0qVchO6Io")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@neoearnboot")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "8557464787"))
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-admin_current_id = 894
-user_steps = {}
+DB_FILE = "bot_database.db"
 
-# قائمة لتخزين جميع المستخدمين الذين تفاعلوا مع البوت لترسل لهم التنبيهات الجماعية
-bot_users = set()
+# ----------------- قاعدة البيانات ----------------- #
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS settings 
+                 (key TEXT PRIMARY KEY, value TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (user_id INTEGER PRIMARY KEY)''')
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('contest_id', '893')")
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('forced_channel', '@neoearnboot')")
+    conn.commit()
+    conn.close()
+
+def get_setting(key, default=""):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key=?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else default
+
+def set_setting(key, value):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
+
+def add_user(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
+def get_all_users():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+init_db()
+
+user_steps = {}
 
 def send_telegram_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -31,27 +77,41 @@ def send_telegram_video(chat_id, video, caption, reply_markup=None):
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global admin_current_id
     if request.headers.get('content-type') == 'application/json':
         data = request.get_json()
         
-        # حفظ أي مستخدم يتفاعل مع البوت في قائمة المستلمين
+        user_id = None
         if "message" in data:
-            bot_users.add(data["message"]["chat"]["id"])
+            user_id = data["message"]["from"]["id"]
         elif "callback_query" in data:
-            bot_users.add(data["callback_query"]["message"]["chat"]["id"])
+            user_id = data["callback_query"]["from"]["id"]
             
-        # معالجة الأزرار التفاعلية
+        if user_id:
+            add_user(user_id)
+
+        # 1. الأزرار التفاعلية
         if "callback_query" in data:
             cq = data["callback_query"]
             chat_id = cq["message"]["chat"]["id"]
+            from_id = cq["from"]["id"]
             message_id = cq["message"]["message_id"]
             data_action = cq["data"]
             
+            if from_id != ADMIN_ID:
+                requests.post(f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery", json={
+                    "callback_query_id": cq["id"], "text": "⛔ غير مسموح لك بإستخدام هذه اللوحة!", "show_alert": True
+                })
+                return '', 200
+
+            admin_current_id = int(get_setting("contest_id", "893"))
+            forced_channel = get_setting("forced_channel", "@neoearnboot")
+
             if data_action == 'next_id':
                 admin_current_id += 1
+                set_setting("contest_id", admin_current_id)
             elif data_action == 'prev_id':
                 admin_current_id -= 1
+                set_setting("contest_id", admin_current_id)
             elif data_action == 'edit_id':
                 user_steps[chat_id] = {"step": "waiting_for_custom_id"}
                 send_telegram_message(chat_id, "✏️ أرسل الرقم الجديد الذي تريد البدء منه الآن:")
@@ -62,19 +122,19 @@ def webhook():
                 return '', 200
             elif data_action == 'broadcast_menu':
                 user_steps[chat_id] = {"step": "waiting_for_broadcast"}
-                send_telegram_message(chat_id, "📢 أرسل الرسالة التي تريد بثها لجميع المستخدمين:")
+                send_telegram_message(chat_id, "📢 أرسل الآن الرسالة التي تريد بثها كرسالة جماعية:")
                 return '', 200
             elif data_action == 'forced_sub_menu':
                 user_steps[chat_id] = {"step": "waiting_for_channel"}
-                send_telegram_message(chat_id, "➕ أرسل يوزر القناة للاشتراك الإجباري (مثلاً @MyChannel):")
+                send_telegram_message(chat_id, f"➕ القناة المحفوظة حالياً: `{forced_channel}`\n\nأرسل يوزر القناة الجديدة للحفظ في الداتابيز (مثال: `@MyChannel`):")
                 return '', 200
 
-            # تحديث لوحة التحكم الرئيسية
             link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
             text = (
-                f"🤖 **مرحباً بك في لوحة تحكم البوت**\n\n"
+                f"🤖 **لوحة التحكم بالبوت**\n\n"
                 f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
-                f"🔗 **الرابط الحالي لفحصه:**\n`{link}`"
+                f"🔗 **الرابط المعتمد:**\n`{link}`\n\n"
+                f"📢 **قناة الاشتراك الإجباري:** `{forced_channel}`"
             )
             markup = {
                 "inline_keyboard": [
@@ -88,19 +148,28 @@ def webhook():
                 "chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown", "reply_markup": markup
             })
 
-        # معالجة الرسائل النصية والفيديوهات
+        # 2. الرسائل الخطوات النصية
         elif "message" in data:
             msg = data["message"]
             chat_id = msg["chat"]["id"]
+            from_id = msg["from"]["id"]
             text = msg.get("text", "")
             
+            if from_id != ADMIN_ID:
+                send_telegram_message(chat_id, "👋 أهلاً بك! استخدم البوت للوصول للمسابقات والمشاركة.")
+                return '', 200
+
+            admin_current_id = int(get_setting("contest_id", "893"))
+            forced_channel = get_setting("forced_channel", "@neoearnboot")
+
             if text == "/start" or text == "/admin":
                 user_steps[chat_id] = {}
                 link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
                 text_msg = (
                     f"🤖 **مرحباً بك في لوحة تحكم البوت**\n\n"
                     f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
-                    f"🔗 **الرابط الحالي لفحصه:**\n`{link}`\n\n"
+                    f"🔗 **الرابط المعتمد:**\n`{link}`\n\n"
+                    f"📢 **قناة الاشتراك الإجباري:** `{forced_channel}`\n\n"
                     f"👇 اختر الإجراء المناسب:"
                 )
                 markup = {
@@ -112,48 +181,77 @@ def webhook():
                 }
                 send_telegram_message(chat_id, text_msg, markup)
                 
-            elif chat_id in user_steps:
+            elif chat_id in user_steps and user_steps[chat_id]:
                 current_state = user_steps[chat_id].get("step")
                 
-                if current_state == "waiting_for_custom_id":
+                if current_state == "waiting_for_channel":
+                    new_ch = text.strip()
+                    set_setting("forced_channel", new_ch)
+                    user_steps[chat_id] = {}
+                    send_telegram_message(chat_id, f"💾 **تم حفظ القناة بنجاح:** `{new_ch}`\n\nاكتب /admin للعودة.")
+
+                elif current_state == "waiting_for_broadcast":
+                    user_steps[chat_id] = {}
+                    users = get_all_users()
+                    send_telegram_message(chat_id, f"⏳ جاري بث الرسالة لـ {len(users)} مستخدمين...")
+                    count = 0
+                    for u_id in users:
+                        try:
+                            send_telegram_message(u_id, text)
+                            count += 1
+                        except Exception:
+                            pass
+                    send_telegram_message(chat_id, f"✅ تم إرسال البث لـ {count} مستخدم بنجاح!")
+
+                elif current_state == "waiting_for_custom_id":
                     try:
-                        admin_current_id = int(text.strip())
+                        new_id = int(text.strip())
+                        set_setting("contest_id", new_id)
                         user_steps[chat_id] = {}
-                        link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
-                        send_telegram_message(chat_id, f"✅ تم تحديث الرقم إلى: `{admin_current_id}`\n🔗 الرابط:\n`{link}`")
+                        link = f"https://t.me/Randomalbot?startapp=contest_{new_id}__r8557464787"
+                        send_telegram_message(chat_id, f"💾 **تم حفظ الرقم الجديد:** `{new_id}`\n🔗 الرابط:\n`{link}`")
                     except ValueError:
                         send_telegram_message(chat_id, "❌ أرسل رقماً صحيحاً فقط!")
                         
                 elif current_state == "waiting_for_video":
                     if "video" in msg:
                         user_steps[chat_id]["video_id"] = msg["video"]["file_id"]
-                        user_steps[chat_id]["step"] = "waiting_for_prizes"
-                        send_telegram_message(chat_id, "🎁 ممتاز! الآن أرسل **عدد الجوائز والتفاصيل** الخاصة بالمسابقة:")
+                        user_steps[chat_id]["step"] = "waiting_for_title"
+                        send_telegram_message(chat_id, "🆓 أدخل **نوع التوزيع / العنوان** (مثال: `توزيع النجوم`):")
                     else:
-                        send_telegram_message(chat_id, "❌ يرجى إرسال فيديو صحيح للمسابقة!")
-                        
-                elif current_state == "waiting_for_prizes":
-                    user_steps[chat_id]["prizes"] = text
+                        send_telegram_message(chat_id, "❌ يرجى إرسال فيديو صحيح!")
+
+                elif current_state == "waiting_for_title":
+                    user_steps[chat_id]["title"] = text.strip()
+                    user_steps[chat_id]["step"] = "waiting_for_prizes_detail"
+                    send_telegram_message(chat_id, "🎁 أدخل **عدد الفائزين والجوائز** (مثال: `4 فائزين . لكل منهم 50 نجمة`):")
+                    
+                elif current_state == "waiting_for_prizes_detail":
+                    user_steps[chat_id]["prizes_detail"] = text.strip()
                     user_steps[chat_id]["step"] = "waiting_for_time"
-                    send_telegram_message(chat_id, "⏰ أدخل الآن **موعد إنتهاء المسابقة** (مثلاً: بعد ساعتين):")
+                    send_telegram_message(chat_id, "⏰ أدخل **الوقت المتبقي** (مثال: `4 ساعات و 57 دقيقة`):")
                     
                 elif current_state == "waiting_for_time":
-                    time_left = text
+                    time_left = text.strip()
                     state_data = user_steps[chat_id]
                     contest_id = state_data.get("contest_id")
                     video_id = state_data.get("video_id")
-                    prizes = state_data.get("prizes")
+                    title = state_data.get("title")
+                    prizes_detail = state_data.get("prizes_detail")
                     
                     user_steps[chat_id] = {}
                     
                     approved_contest_link = f"https://t.me/Randomalbot?startapp=contest_{contest_id}__r8557464787"
                     
+                    # صياغة المنشور بالشكل والمظهر والإيموجيات المطلوبة
                     caption = (
-                        f"🎁 **مسابقة جديدة قيد انتضارك**\n\n"
-                        f"🏆 **التفاصيل والجوائز:**\n{prizes}\n\n"
-                        f"⏳ تبقى **{time_left}** على نهاية المسابقة\n\n"
-                        f"👇 **شارك في السحب من هنا**"
+                        f"🆓 {title}\n\n"
+                        f"🎁 الجوائز:\n"
+                        f"🏆 {prizes_detail} ⭐\n\n"
+                        f"⏰ الوقت المتبقي: {time_left}\n\n"
+                        f"👇 لا تفوت فرصة المشاركة!"
                     )
+                    
                     keyboard = {
                         "inline_keyboard": [
                             [{"text": "🚀 شارك في السحب الآن", "url": approved_contest_link}]
@@ -163,34 +261,27 @@ def webhook():
                     # 1. النشر في القناة
                     send_telegram_video(CHANNEL_ID, video_id, caption, keyboard)
                     
-                    # 2. إرسال التنبيه لجميع أعضاء ومستخدمي البوت داخل خاص البوت
+                    # 2. إرسال التنبيه الجماعي بنفس التنسيق
                     user_notification = (
                         f"🚨 **تنبيه مسابقة جديدة!**\n\n"
-                        f"تم إطلاق مسابقة جديدة رقم #{contest_id}، سارع بالمشاركة فوراً! 🔥\n\n"
-                        f"🏆 **الجوائز:** {prizes}\n"
-                        f"⏳ **الوقت المتبقي:** {time_left}"
+                        f"{caption}"
                     )
-                    user_keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "🚀 شارك في المسابقة الآن", "url": approved_contest_link}]
-                        ]
-                    }
                     
-                    # حلقة تكرارية للإرسال لكل مستخدمي البوت
-                    for user_id in bot_users:
+                    all_u = get_all_users()
+                    for u_id in all_u:
                         try:
-                            send_telegram_message(user_id, user_notification, user_keyboard)
+                            send_telegram_video(u_id, video_id, user_notification, keyboard)
                         except Exception:
-                            pass # في حال قام مستخدم بحظر البوت لا تتوقف العملية
+                            pass
 
-                    send_telegram_message(chat_id, "✅ **تم نشر المسابقة في القناة وإرسال التنبيه لجميع مستخدمي البوت بنجاح!**\n\nاكتب /admin للعودة للوحة التحكم.")
+                    send_telegram_message(chat_id, "✅ **تم نشر المسابقة بالتنسيق الجديد وإرسال التنبيهات بنجاح!**\n\nاكتب /admin للعودة.")
 
         return '', 200
     return 'OK', 200
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بكفاءة!"
+    return "🤖 البوت يعمل والداتابيز متصلة بنجاح!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
