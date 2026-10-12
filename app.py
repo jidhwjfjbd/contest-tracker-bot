@@ -23,7 +23,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (user_id INTEGER PRIMARY KEY)''')
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('contest_id', '893')")
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('forced_channel', '@neoearnboot')")
     conn.commit()
     conn.close()
 
@@ -89,7 +88,7 @@ def webhook():
         if user_id:
             add_user(user_id)
 
-        # 1. الأزرار التفاعلية
+        # 1. لوحة التحكم للأدمن (Callback Query)
         if "callback_query" in data:
             cq = data["callback_query"]
             chat_id = cq["message"]["chat"]["id"]
@@ -104,7 +103,6 @@ def webhook():
                 return '', 200
 
             admin_current_id = int(get_setting("contest_id", "893"))
-            forced_channel = get_setting("forced_channel", "@neoearnboot")
 
             if data_action == 'next_id':
                 admin_current_id += 1
@@ -124,44 +122,46 @@ def webhook():
                 user_steps[chat_id] = {"step": "waiting_for_broadcast"}
                 send_telegram_message(chat_id, "📢 أرسل الآن الرسالة التي تريد بثها كرسالة جماعية:")
                 return '', 200
-            elif data_action == 'forced_sub_menu':
-                user_steps[chat_id] = {"step": "waiting_for_channel"}
-                send_telegram_message(chat_id, f"➕ القناة المحفوظة حالياً: `{forced_channel}`\n\nأرسل يوزر القناة الجديدة للحفظ في الداتابيز (مثال: `@MyChannel`):")
-                return '', 200
 
             link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
             text = (
                 f"🤖 **لوحة التحكم بالبوت**\n\n"
                 f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
-                f"🔗 **الرابط المعتمد:**\n`{link}`\n\n"
-                f"📢 **قناة الاشتراك الإجباري:** `{forced_channel}`"
+                f"🔗 **الرابط المعتمد:**\n`{link}`"
             )
             markup = {
                 "inline_keyboard": [
                     [{"text": "⬅️ السابق", "callback_data": "prev_id"}, {"text": "التالي ➡️", "callback_data": "next_id"}],
                     [{"text": "✏️ تعديل الرقم يدوياً", "callback_data": "edit_id"}],
                     [{"text": "✅ الرابط سليم (ابدأ النشر)", "callback_data": "approve_contest"}],
-                    [{"text": "📢 رسالة جماعية", "callback_data": "broadcast_menu"}, {"text": "➕ إشتراك إجباري", "callback_data": "forced_sub_menu"}]
+                    [{"text": "📢 رسالة جماعية", "callback_data": "broadcast_menu"}]
                 ]
             }
             requests.post(f"https://api.telegram.org/bot{TOKEN}/editMessageText", json={
                 "chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown", "reply_markup": markup
             })
 
-        # 2. الرسائل الخطوات النصية
+        # 2. معالجة الرسائل العادية والمستخدمين
         elif "message" in data:
             msg = data["message"]
             chat_id = msg["chat"]["id"]
             from_id = msg["from"]["id"]
             text = msg.get("text", "")
             
+            # 🟢 رد المستخدم العادي عند الضغط على /start
             if from_id != ADMIN_ID:
-                send_telegram_message(chat_id, "👋 أهلاً بك! استخدم البوت للوصول للمسابقات والمشاركة.")
+                welcome_text = "أهلاً بك! 👋 استخدم البوت للوصول للمسابقات والمشاركة.\n\nإنضم لقناة البوت لتتابع جميع المسابقات:"
+                welcome_keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "📢 قناة البوت الرسمية", "url": "https://t.me/neoearnboot"}]
+                    ]
+                }
+                send_telegram_message(chat_id, welcome_text, welcome_keyboard)
                 return '', 200
 
             admin_current_id = int(get_setting("contest_id", "893"))
-            forced_channel = get_setting("forced_channel", "@neoearnboot")
 
+            # 🟢 رد الأدمن عند فتح البوت
             if text == "/start" or text == "/admin":
                 user_steps[chat_id] = {}
                 link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
@@ -169,28 +169,21 @@ def webhook():
                     f"🤖 **مرحباً بك في لوحة تحكم البوت**\n\n"
                     f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
                     f"🔗 **الرابط المعتمد:**\n`{link}`\n\n"
-                    f"📢 **قناة الاشتراك الإجباري:** `{forced_channel}`\n\n"
                     f"👇 اختر الإجراء المناسب:"
                 )
                 markup = {
                     "inline_keyboard": [
                         [{"text": "⬅️ السابق", "callback_data": "prev_id"}, {"text": "التالي ➡️", "callback_data": "next_id"}],
                         [{"text": "✏️ تعديل الرقم يدوياً", "callback_data": "edit_id"}],
-                        [{"text": "📢 رسالة جماعية", "callback_data": "broadcast_menu"}, {"text": "➕ إشتراك إجباري", "callback_data": "forced_sub_menu"}]
+                        [{"text": "📢 رسالة جماعية", "callback_data": "broadcast_menu"}]
                     ]
                 }
                 send_telegram_message(chat_id, text_msg, markup)
                 
             elif chat_id in user_steps and user_steps[chat_id]:
                 current_state = user_steps[chat_id].get("step")
-                
-                if current_state == "waiting_for_channel":
-                    new_ch = text.strip()
-                    set_setting("forced_channel", new_ch)
-                    user_steps[chat_id] = {}
-                    send_telegram_message(chat_id, f"💾 **تم حفظ القناة بنجاح:** `{new_ch}`\n\nاكتب /admin للعودة.")
 
-                elif current_state == "waiting_for_broadcast":
+                if current_state == "waiting_for_broadcast":
                     user_steps[chat_id] = {}
                     users = get_all_users()
                     send_telegram_message(chat_id, f"⏳ جاري بث الرسالة لـ {len(users)} مستخدمين...")
@@ -243,7 +236,6 @@ def webhook():
                     
                     approved_contest_link = f"https://t.me/Randomalbot?startapp=contest_{contest_id}__r8557464787"
                     
-                    # صياغة المنشور بالشكل والمظهر والإيموجيات المطلوبة
                     caption = (
                         f"🆓 {title}\n\n"
                         f"🎁 الجوائز:\n"
@@ -261,11 +253,8 @@ def webhook():
                     # 1. النشر في القناة
                     send_telegram_video(CHANNEL_ID, video_id, caption, keyboard)
                     
-                    # 2. إرسال التنبيه الجماعي بنفس التنسيق
-                    user_notification = (
-                        f"🚨 **تنبيه مسابقة جديدة!**\n\n"
-                        f"{caption}"
-                    )
+                    # 2. إرسال التنبيه الجماعي للمستخدمين
+                    user_notification = f"🚨 **تنبيه مسابقة جديدة!**\n\n{caption}"
                     
                     all_u = get_all_users()
                     for u_id in all_u:
@@ -281,7 +270,7 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل والداتابيز متصلة بنجاح!"
+    return "🤖 البوت يعمل بكفاءة!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
