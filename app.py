@@ -12,7 +12,6 @@ BASE_URL = os.getenv("BASE_URL", "https://contest-tracker-bot.onrender.com")
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# استخدام مسار دائم إذا وجد قرص Render، وإلا الملف المحلي
 DB_FILE = "/var/data/bot_database.db" if os.path.exists("/var/data") else "bot_database.db"
 
 # ----------------- Database Setup ----------------- #
@@ -20,7 +19,6 @@ DB_FILE = "/var/data/bot_database.db" if os.path.exists("/var/data") else "bot_d
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Users Table with Fingerprint & Verification
     c.execute('''CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
                     balance REAL DEFAULT 0.0,
@@ -29,12 +27,10 @@ def init_db():
                     verified INTEGER DEFAULT 0,
                     device_fingerprint TEXT
                 )''')
-    # Forced Channels Table
     c.execute('''CREATE TABLE IF NOT EXISTS channels (
                     channel_id TEXT PRIMARY KEY,
                     invite_link TEXT
                 )''')
-    # Withdrawals Log Table
     c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
@@ -52,6 +48,7 @@ def get_db():
 
 init_db()
 
+# لتتبع خطوات المستخدم (مثل إدخال مبلغ السحب ثم إدخال Binance ID)
 user_steps = {}
 
 # ----------------- Helper Functions ----------------- #
@@ -108,7 +105,7 @@ def get_user_lang(user_id):
 
 TASKS_TEXT_AR = """🎯 **مهمة الربح المجاني المميزة**
 
-⚠️ **للحصول على مكافأة المهمة، يجب إكمال الشروط التالية بدقة:**
+⚠️ **ل للحصول على مكافأة المهمة، يجب إكمال الشروط التالية بدقة:**
 
 1️⃣ **الشرط الأول:**
 الانضمام للقناة عبر هذا الرابط الخاص:
@@ -149,16 +146,17 @@ TEXTS = {
         "verify_req": "⚠️ **عذراً، يجب إكمال عملية التحقق من الجهاز لمنع الحسابات المكررة أولاً:**",
         "must_sub": "⚠️ **يجب عليك الاشتراك في القنوات التالية لاستخدام البوت:**",
         "check_sub_btn": "🔄 تحقق من الاشتراك",
-        "main_menu": "🏠 **اللوحة الرئيسية:**",
         "btn_tasks": "🎯 مهام ربح مجانية",
         "btn_ref": "🔗 رابط الإحالة",
         "btn_withdraw": "💸 طلب السحب",
         "btn_lang": "🌐 تغيير اللغة",
         "ref_text": "🔗 **رابط الإحالة الخاص بك:**\n`{link}`\n\n🎁 **مكافأة كل إحالة:** 0.01$\n👥 **عدد إحالاتك:** {count}",
         "tasks_text": TASKS_TEXT_AR,
-        "withdraw_min_err": "❌ **رصيدك الحالي:** ${bal:.2f}\n⚠️ **الحد الأدنى للسحب هو 0.10$**\nشارك رابط إحالتك لزيادة رصيدك!",
-        "withdraw_prompt": "💳 **أدخل الآن Binance ID الخاص بك لاستلام السحب:**\n(رصيدك الحالي: ${bal:.2f})",
-        "withdraw_success": "✅ **تم تسجيل طلب السحب بنجاح!**\n💰 المبلغ: ${bal:.2f}\n🆔 Binance ID: `{bid}`\nسيتم المعالجة قريباً.",
+        "withdraw_enter_amount": "💰 **رصيدك الحالي:** ${bal:.2f}\n\nالحد الأدنى للسحب هو **0.10$**.\nالرجاء كتابة المبلغ الذي تريد سحبه الآن:",
+        "withdraw_min_err": "❌ **المبلغ المكتوب (${amt:.2f}) أقل من الحد الأدنى للسحب (0.10$)!**\nقم بجمع المزيد من الإحالات والعودة مجدداً.",
+        "withdraw_bal_err": "❌ **المبلغ المطلوب (${amt:.2f}) أكثر من رصيدك الحالي (${bal:.2f})!**",
+        "withdraw_prompt_binance": "💳 **المبلغ المراد سحبه:** ${amt:.2f}\n\nالرجاء إرسال **Binance ID** الخاص بك الآن لاستلام السحب:",
+        "withdraw_success": "✅ **تم تسجيل طلب السحب بنجاح!**\n💰 المبلغ: ${amt:.2f}\n🆔 Binance ID: `{bid}`\nسيتم مراجعته وإرسال المبلغ قريباً.",
         "lang_changed": "✅ تم تغيير اللغة بنجاح إلى العربية!"
     },
     "en": {
@@ -167,16 +165,17 @@ TEXTS = {
         "verify_req": "⚠️ **Device verification is required to prevent multiple accounts:**",
         "must_sub": "⚠️ **You must join the following channels to use the bot:**",
         "check_sub_btn": "🔄 Check Subscription",
-        "main_menu": "🏠 **Main Menu:**",
         "btn_tasks": "🎯 Free Tasks",
         "btn_ref": "🔗 Referral Link",
         "btn_withdraw": "💸 Withdraw",
         "btn_lang": "🌐 Change Language",
         "ref_text": "🔗 **Your Referral Link:**\n`{link}`\n\n🎁 **Reward per referral:** $0.01\n👥 **Total Referrals:** {count}",
         "tasks_text": TASKS_TEXT_EN,
-        "withdraw_min_err": "❌ **Current Balance:** ${bal:.2f}\n⚠️ **Minimum withdrawal is $0.10**\nShare your link to earn more!",
-        "withdraw_prompt": "💳 **Enter your Binance ID to receive payment:**\n(Current Balance: ${bal:.2f})",
-        "withdraw_success": "✅ **Withdrawal request submitted!**\n💰 Amount: ${bal:.2f}\n🆔 Binance ID: `{bid}`\nWill be processed shortly.",
+        "withdraw_enter_amount": "💰 **Your Balance:** ${bal:.2f}\n\nMinimum withdrawal is **$0.10**.\nPlease enter the amount you wish to withdraw:",
+        "withdraw_min_err": "❌ **The entered amount (${amt:.2f}) is below the minimum withdrawal ($0.10)!**",
+        "withdraw_bal_err": "❌ **The requested amount (${amt:.2f}) exceeds your balance (${bal:.2f})!**",
+        "withdraw_prompt_binance": "💳 **Withdrawal Amount:** ${amt:.2f}\n\nPlease send your **Binance ID** now:",
+        "withdraw_success": "✅ **Withdrawal request submitted!**\n💰 Amount: ${amt:.2f}\n🆔 Binance ID: `{bid}`\nProcessing soon.",
         "lang_changed": "✅ Language changed successfully to English!"
     }
 }
@@ -288,20 +287,18 @@ def api_verify_device():
         return jsonify({"status": "error", "message": "Invalid Parameters"}), 400
 
     conn = get_db()
-    # التحقق مما إذا كانت البصمة مستخدمة مسبقاً في حساب آخر
     existing = conn.execute("SELECT user_id FROM users WHERE device_fingerprint=? AND user_id!=?", (fp, user_id)).fetchone()
     
     if existing:
         conn.close()
         return jsonify({"status": "error", "message": "⛔ Multi-account detected! Devices can only hold one account."}), 403
 
-    # حفظ بصمة الجهاز وحالة التحقق بشكل دائم
     conn.execute("UPDATE users SET verified=1, device_fingerprint=? WHERE user_id=?", (fp, user_id))
     conn.commit()
     conn.close()
 
     lang = get_user_lang(user_id)
-    send_message(user_id, "✅ **تم التحقق من جهازك بنجاح وحفظ بصمتك! يمكنك الآن استخدام البوت بككامل ميزاته.**", get_main_keyboard(lang))
+    send_message(user_id, "✅ **تم التحقق من جهازك بنجاح وحفظ بصمتك! يمكنك الآن استخدام البوت بكامل ميزاته.**", get_main_keyboard(lang))
     return jsonify({"status": "success"})
 
 # ----------------- Webhook Handling ----------------- #
@@ -329,7 +326,7 @@ def webhook():
     conn = get_db()
     u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
     
-    # Process Referral
+    # Process Referral Link Param
     ref_id = None
     if text.startswith("/start") and " " in text:
         parts = text.split(" ")
@@ -345,14 +342,14 @@ def webhook():
         u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
     conn.close()
 
-    lang = u["language"]
+    lang = u["language"] if u else "ar"
     t = TEXTS[lang]
 
     # Handle Admin Controls First
     if from_id == ADMIN_ID and handle_admin_messages(chat_id, text, msg):
         return '', 200
 
-    # 1. Verification Gate (ZORO System) - تظهر فقط للمستخدمين الذين لم يتحققوا بعد
+    # 1. Verification Gate
     if not u["verified"]:
         verify_markup = {
             "inline_keyboard": [[
@@ -372,18 +369,63 @@ def webhook():
         send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
         return '', 200
 
-    # 3. Main Menu Operations (تعمل بكفاءة مطلقة بالكلمات المفتاحية للغتين)
+    # 3. Handling Pending Steps (Withdrawal Logic)
+    state = user_steps.get(from_id)
+    
+    if isinstance(state, str) and state == "waiting_withdraw_amount":
+        try:
+            amount = float(text)
+            conn = get_db()
+            bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
+            conn.close()
+
+            if amount < 0.10:
+                send_message(chat_id, t["withdraw_min_err"].format(amt=amount))
+                user_steps[from_id] = None
+            elif amount > bal:
+                send_message(chat_id, t["withdraw_bal_err"].format(amt=amount, bal=bal))
+                user_steps[from_id] = None
+            else:
+                user_steps[from_id] = {"step": "waiting_binance_id", "amount": amount}
+                send_message(chat_id, t["withdraw_prompt_binance"].format(amt=amount))
+        except ValueError:
+            send_message(chat_id, "❌ **الرجاء كتابة رقم صحيح فقط!** (مثال: `0.15`)")
+        return '', 200
+
+    elif isinstance(state, dict) and state.get("step") == "waiting_binance_id":
+        amount = state.get("amount", 0.0)
+        binance_id = text
+        user_steps[from_id] = None
+
+        conn = get_db()
+        bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
+        if bal >= amount and amount >= 0.10:
+            conn.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, from_id))
+            conn.execute("INSERT INTO withdrawals (user_id, amount, binance_id) VALUES (?, ?, ?)", (from_id, amount, binance_id))
+            conn.commit()
+            send_message(chat_id, t["withdraw_success"].format(amt=amount, bid=binance_id))
+            send_message(ADMIN_ID, f"📥 **طلب سحب جديد:**\n👤 المستخدم: `{from_id}`\n💰 المبلغ: ${amount:.2f}\n🆔 Binance ID: `{binance_id}`")
+        else:
+            send_message(chat_id, t["withdraw_min_err"].format(amt=amount))
+        conn.close()
+        return '', 200
+
+    # 4. Main Menu Buttons Processing (طريقة الكلمات المفتاحية المضمونة)
     if text in ["/start", "الرئيسية", "Main"]:
+        user_steps[from_id] = None
         send_message(chat_id, t["welcome"], get_main_keyboard(lang))
 
-    elif any(k in text for k in ["مهام", "Tasks", "Free Tasks"]):
+    elif any(k in text for k in ["مهام", "Tasks"]):
+        user_steps[from_id] = None
         send_message(chat_id, t["tasks_text"])
 
-    elif any(k in text for k in ["إحالة", "Referral", "Referral Link"]):
+    elif any(k in text for k in ["إحالة", "Referral"]):
+        user_steps[from_id] = None
         conn = get_db()
         cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (from_id,)).fetchone()[0]
         conn.close()
-        bot_username = (send_telegram_request('getMe', {}) or {}).get('result', {}).get('username', '')
+        bot_res = send_telegram_request('getMe', {}) or {}
+        bot_username = bot_res.get('result', {}).get('username', 'NeoEarnBot')
         ref_link = f"https://t.me/{bot_username}?start={from_id}"
         send_message(chat_id, t["ref_text"].format(link=ref_link, count=cnt))
 
@@ -391,34 +433,17 @@ def webhook():
         conn = get_db()
         bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
         conn.close()
-        if bal < 0.10:
-            send_message(chat_id, t["withdraw_min_err"].format(bal=bal))
-        else:
-            user_steps[from_id] = "waiting_binance_id"
-            send_message(chat_id, t["withdraw_prompt"].format(bal=bal))
+        user_steps[from_id] = "waiting_withdraw_amount"
+        send_message(chat_id, t["withdraw_enter_amount"].format(bal=bal))
 
-    elif any(k in text for k in ["لغة", "Language", "Change Language"]):
+    elif any(k in text for k in ["لغة", "Language"]):
+        user_steps[from_id] = None
         lang_kb = {
             "inline_keyboard": [
                 [{"text": "🇸🇦 العربية", "callback_data": "set_lang_ar"}, {"text": "🇺🇸 English", "callback_data": "set_lang_en"}]
             ]
         }
         send_message(chat_id, t["lang_select"], lang_kb)
-
-    elif user_steps.get(from_id) == "waiting_binance_id":
-        user_steps[from_id] = None
-        binance_id = text
-        conn = get_db()
-        bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
-        if bal >= 0.10:
-            conn.execute("UPDATE users SET balance=0 WHERE user_id=?", (from_id,))
-            conn.execute("INSERT INTO withdrawals (user_id, amount, binance_id) VALUES (?, ?, ?)", (from_id, bal, binance_id))
-            conn.commit()
-            send_message(chat_id, t["withdraw_success"].format(bal=bal, bid=binance_id))
-            send_message(ADMIN_ID, f"📥 **طلب سحب جديد:**\n👤 المستخدم: `{from_id}`\n💰 المبلغ: ${bal:.2f}\n🆔 Binance ID: `{binance_id}`")
-        else:
-            send_message(chat_id, t["withdraw_min_err"].format(bal=bal))
-        conn.close()
 
     return '', 200
 
@@ -517,7 +542,7 @@ def handle_admin_messages(chat_id, text, msg):
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بكفاءة مع نظام ZORO وحفظ البصمة الدائم!"
+    return "🤖 البوت يعمل بكفاءة مع خيارات السحب والإحالة المحدثة!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
