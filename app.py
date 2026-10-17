@@ -1,281 +1,519 @@
 import os
 import sqlite3
 import logging
-from flask import Flask, request
+import json
+from flask import Flask, request, jsonify, render_template_string
 import requests
 
 TOKEN = os.getenv("BOT_TOKEN", "8938116145:AAHkVV0geUtkdOh04pZgdzQpxL0qVchO6Io")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@neoearnboot")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8557464787"))
+BASE_URL = os.getenv("BASE_URL", "https://contest-tracker-bot.onrender.com")
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-DB_FILE = "bot_database.db"
+DB_FILE = "/var/data/bot_database.db" if os.path.exists("/var/data") else "bot_database.db"
 
-# ----------------- قاعدة البيانات ----------------- #
+# ----------------- Database Setup ----------------- #
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS settings 
-                 (key TEXT PRIMARY KEY, value TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (user_id INTEGER PRIMARY KEY)''')
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('contest_id', '893')")
+    # Users Table
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    balance REAL DEFAULT 0.0,
+                    referred_by INTEGER,
+                    language TEXT DEFAULT 'ar',
+                    verified INTEGER DEFAULT 0,
+                    device_fingerprint TEXT
+                )''')
+    # Forced Channels Table
+    c.execute('''CREATE TABLE IF NOT EXISTS channels (
+                    channel_id TEXT PRIMARY KEY,
+                    invite_link TEXT
+                )''')
+    # Withdrawals Log Table
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount REAL,
+                    binance_id TEXT,
+                    status TEXT DEFAULT 'pending'
+                )''')
     conn.commit()
     conn.close()
 
-def get_setting(key, default=""):
+def get_db():
     conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key=?", (key,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else default
-
-def set_setting(key, value):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-    conn.close()
-
-def add_user(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    conn.commit()
-    conn.close()
-
-def get_all_users():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM users")
-    rows = c.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+    conn.row_factory = sqlite3.Row
+    return conn
 
 init_db()
 
 user_steps = {}
 
-def send_telegram_message(chat_id, text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    return requests.post(url, json=payload).json()
+# ----------------- Helper Functions ----------------- #
 
-def send_telegram_video(chat_id, video, caption, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendVideo"
-    payload = {"chat_id": chat_id, "video": video, "caption": caption, "parse_mode": "Markdown"}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    return requests.post(url, json=payload).json()
+def send_telegram_request(method, payload):
+    url = f"https://api.telegram.org/bot{TOKEN}/{method}"
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        return res.json()
+    except Exception as e:
+        logging.error(f"Telegram Request Error ({method}): {e}")
+        return None
+
+def send_message(chat_id, text, reply_markup=None):
+    return send_telegram_request("sendMessage", {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "reply_markup": reply_markup
+    })
+
+def send_photo(chat_id, photo, caption="", reply_markup=None):
+    return send_telegram_request("sendPhoto", {
+        "chat_id": chat_id,
+        "photo": photo,
+        "caption": caption,
+        "parse_mode": "Markdown",
+        "reply_markup": reply_markup
+    })
+
+def check_forced_subscriptions(user_id):
+    conn = get_db()
+    channels = conn.execute("SELECT channel_id, invite_link FROM channels").fetchall()
+    conn.close()
+    
+    unsubscribed = []
+    for ch in channels:
+        res = send_telegram_request("getChatMember", {"chat_id": ch["channel_id"], "user_id": user_id})
+        if res and res.get("ok"):
+            status = res["result"].get("status")
+            if status not in ["member", "administrator", "creator"]:
+                unsubscribed.append(ch)
+        else:
+            unsubscribed.append(ch)
+    return unsubscribed
+
+def get_user_lang(user_id):
+    conn = get_db()
+    u = conn.execute("SELECT language FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return u["language"] if u else "ar"
+
+# ----------------- Texts & Translations ----------------- #
+
+TASKS_TEXT_AR = """🎯 **مهمة الربح المجاني المميزة**
+
+⚠️ **للحصول على مكافأة المهمة، يجب إكمال الشروط التالية بدقة:**
+
+1️⃣ **الشرط الأول:**
+الانضمام للقناة عبر هذا الرابط الخاص:
+👉 https://t.me/+4jDGJ8ZM2XI2NzQ0
+ثم أخذ لقطة شاشة (Screenshot) تُثبت الانضمام، وإرسالها إلى الحساب: @tawsiatKE
+
+2️⃣ **الشرط الثاني:**
+أخذ لقطة شاشة (Screenshot) لملفك الشخصي (Profile) يظهر فيه **ID حسابك** وأنه **موثق**، وإرسالها أيضاً للحساب: @tawsiatKE
+*(هذا الإجراء لمنع الحسابات الوهمية أو كشف تعديلات الفوتوشوب)*.
+
+3️⃣ **الشرط الثالث (بينك وبين الله وهو أهم شرط):**
+لا تخرج من القناة بعد حصولك على الجائزة؛ لأنك بذلك تكون قد انتهكت الشروط كلها، وسيكون ربحك **غير مباح شرعاً** حتى لو كان 0.05$.
+
+📩 **لإرسال الإثباتات والاستفسار:** @tawsiatKE"""
+
+TASKS_TEXT_EN = """🎯 **Free Reward Task**
+
+⚠️ **To claim your task reward, you must complete the following steps carefully:**
+
+1️⃣ **First Condition:**
+Join the channel via this private link:
+👉 https://t.me/+4jDGJ8ZM2XI2NzQ0
+Take a screenshot proving you joined, and send it to: @tawsiatKE
+
+2️⃣ **Second Condition:**
+Take a screenshot of your Profile showing your **Account ID** and that it is **Verified**, then send it to: @tawsiatKE
+*(This is strictly required to detect fake or photo-edited accounts)*.
+
+3️⃣ **Third & Most Important Condition (Between you and God):**
+Do not leave the channel after receiving your reward. Doing so violates all terms, and your earnings will **not be permissible (حرام/Halal concern)** even if it is just $0.05.
+
+📩 **Send proof to:** @tawsiatKE"""
+
+TEXTS = {
+    "ar": {
+        "welcome": "👋 **أهلاً بك في بوت الربح المجاني!**\n\nقم بزيادة رصيدك من خلال الإحالات وإكمال المهام اليومية.",
+        "lang_select": "🌐 **اختر اللغة المناسبة لك / Choose your language:**",
+        "verify_req": "⚠️ **عذراً، يجب إكمال عملية التحقق من الجهاز لمنع الحسابات المكررة أولاً:**",
+        "must_sub": "⚠️ **يجب عليك الاشتراك في القنوات التالية لاستخدام البوت:**",
+        "check_sub_btn": "🔄 تحقق من الاشتراك",
+        "main_menu": "🏠 **اللوحة الرئيسية:**",
+        "btn_tasks": "🎯 مهام ربح مجانية",
+        "btn_ref": "🔗 رابط الإحالة",
+        "btn_withdraw": "💸 طلب السحب",
+        "btn_lang": "🌐 تغيير اللغة",
+        "ref_text": "🔗 **رابط الإحالة الخاص بك:**\n`{link}`\n\n🎁 **مكافأة كل إحالة:** 0.01$\n👥 **عدد إحالاتك:** {count}",
+        "tasks_text": TASKS_TEXT_AR,
+        "withdraw_min_err": "❌ **رصيدك الحالي:** ${bal:.2f}\n⚠️ **الحد الأدنى للسحب هو 0.10$**\nشارك رابط إحالتك لزيادة رصيدك!",
+        "withdraw_prompt": "💳 **أدخل الآن Binance ID الخاص بك لاستلام السحب:**\n(رصيدك الحالي: ${bal:.2f})",
+        "withdraw_success": "✅ **تم تسجيل طلب السحب بنجاح!**\n💰 المبلغ: ${bal:.2f}\n🆔 Binance ID: `{bid}`\nسيتم المعالجة قريباً.",
+        "lang_changed": "✅ تم تغيير اللغة بنجاح إلى العربية!"
+    },
+    "en": {
+        "welcome": "👋 **Welcome to Earn Free Bot!**\n\nEarn money by inviting friends and completing daily tasks.",
+        "lang_select": "🌐 **Choose your language / اختر اللغة المناسبة لك:**",
+        "verify_req": "⚠️ **Device verification is required to prevent multiple accounts:**",
+        "must_sub": "⚠️ **You must join the following channels to use the bot:**",
+        "check_sub_btn": "🔄 Check Subscription",
+        "main_menu": "🏠 **Main Menu:**",
+        "btn_tasks": "🎯 Free Tasks",
+        "btn_ref": "🔗 Referral Link",
+        "btn_withdraw": "💸 Withdraw",
+        "btn_lang": "🌐 Change Language",
+        "ref_text": "🔗 **Your Referral Link:**\n`{link}`\n\n🎁 **Reward per referral:** $0.01\n👥 **Total Referrals:** {count}",
+        "tasks_text": TASKS_TEXT_EN,
+        "withdraw_min_err": "❌ **Current Balance:** ${bal:.2f}\n⚠️ **Minimum withdrawal is $0.10**\nShare your link to earn more!",
+        "withdraw_prompt": "💳 **Enter your Binance ID to receive payment:**\n(Current Balance: ${bal:.2f})",
+        "withdraw_success": "✅ **Withdrawal request submitted!**\n💰 Amount: ${bal:.2f}\n🆔 Binance ID: `{bid}`\nWill be processed shortly.",
+        "lang_changed": "✅ Language changed successfully to English!"
+    }
+}
+
+def get_main_keyboard(lang):
+    t = TEXTS[lang]
+    return {
+        "keyboard": [
+            [{"text": t["btn_tasks"]}, {"text": t["btn_ref"]}],
+            [{"text": t["btn_withdraw"]}, {"text": t["btn_lang"]}]
+        ],
+        "resize_keyboard": True
+    }
+
+# ----------------- Web Application for Verification (ZORO Fingerprint) ----------------- #
+
+ZORO_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZORO Security Verification</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px 20px; }
+        .card { background: #1e1e1e; border-radius: 12px; padding: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        .btn { background: #0088cc; color: white; border: none; padding: 14px 28px; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 20px; }
+        .loader { display: none; margin: 20px auto; border: 4px solid #333; border-top: 4px solid #0088cc; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🛡️ ZORO Security Verification</h2>
+        <p>Click below to verify your device fingerprint and secure your account.</p>
+        <div class="loader" id="loader"></div>
+        <button class="btn" id="verifyBtn" onclick="verifyDevice()">Verify Device Now</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        function getFingerprint() {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = "top";
+            ctx.font = "14px 'Arial'";
+            ctx.textBaseline = "alphabetic";
+            ctx.fillStyle = "#f60";
+            ctx.fillRect(125,1,62,20);
+            ctx.fillStyle = "#069";
+            ctx.fillText("ZORO_FP", 2, 15);
+            return canvas.toDataURL().slice(-50) + screen.width + "x" + screen.height + navigator.hardwareConcurrency;
+        }
+
+        function verifyDevice() {
+            document.getElementById('verifyBtn').style.display = 'none';
+            document.getElementById('loader').style.display = 'block';
+
+            const user = tg.initDataUnsafe.user;
+            if (!user) {
+                alert("Please open this page inside Telegram!");
+                return;
+            }
+
+            const payload = {
+                user_id: user.id,
+                fingerprint: getFingerprint()
+            };
+
+            fetch('/api/verify-device', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    tg.close();
+                } else {
+                    alert(data.message || "Verification Failed!");
+                    document.getElementById('verifyBtn').style.display = 'inline-block';
+                    document.getElementById('loader').style.display = 'none';
+                }
+            })
+            .catch(err => {
+                alert("Network Error!");
+                document.getElementById('verifyBtn').style.display = 'inline-block';
+                document.getElementById('loader').style.display = 'none';
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+@app.route('/verify')
+def verify_page():
+    return render_template_string(ZORO_HTML)
+
+@app.route('/api/verify-device', methods=['POST'])
+def api_verify_device():
+    data = request.get_json() or {}
+    user_id = data.get("user_id")
+    fp = data.get("fingerprint")
+
+    if not user_id or not fp:
+        return jsonify({"status": "error", "message": "Invalid Parameters"}), 400
+
+    conn = get_db()
+    existing = conn.execute("SELECT user_id FROM users WHERE device_fingerprint=? AND user_id!=?", (fp, user_id)).fetchone()
+    
+    if existing:
+        conn.close()
+        return jsonify({"status": "error", "message": "⛔ Multi-account detected! Devices can only hold one account."}), 403
+
+    conn.execute("UPDATE users SET verified=1, device_fingerprint=? WHERE user_id=?", (fp, user_id))
+    conn.commit()
+    conn.close()
+
+    lang = get_user_lang(user_id)
+    send_message(user_id, "✅ **تم التحقق من جهازك بنجاح! يمكنك الآن استخدام البوت.**", get_main_keyboard(lang))
+    return jsonify({"status": "success"})
+
+# ----------------- Webhook Handling ----------------- #
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        data = request.get_json()
-        
-        user_id = None
-        if "message" in data:
-            user_id = data["message"]["from"]["id"]
-        elif "callback_query" in data:
-            user_id = data["callback_query"]["from"]["id"]
-            
-        if user_id:
-            add_user(user_id)
+    if request.headers.get('content-type') != 'application/json':
+        return 'OK', 200
 
-        # 1. لوحة التحكم للأدمن
-        if "callback_query" in data:
-            cq = data["callback_query"]
-            chat_id = cq["message"]["chat"]["id"]
-            from_id = cq["from"]["id"]
-            message_id = cq["message"]["message_id"]
-            data_action = cq["data"]
-            
-            if from_id != ADMIN_ID:
-                requests.post(f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery", json={
-                    "callback_query_id": cq["id"], "text": "⛔ غير مسموح لك بإستخدام هذه اللوحة!", "show_alert": True
-                })
-                return '', 200
+    data = request.get_json()
+    msg = data.get("message")
+    cq = data.get("callback_query")
 
-            admin_current_id = int(get_setting("contest_id", "893"))
-
-            if data_action == 'next_id':
-                admin_current_id += 1
-                set_setting("contest_id", admin_current_id)
-            elif data_action == 'prev_id':
-                admin_current_id -= 1
-                set_setting("contest_id", admin_current_id)
-            elif data_action == 'edit_id':
-                user_steps[chat_id] = {"step": "waiting_for_custom_id"}
-                send_telegram_message(chat_id, "✏️ أرسل الرقم الجديد الذي تريد البدء منه الآن:")
-                return '', 200
-            elif data_action == 'approve_contest':
-                user_steps[chat_id] = {"step": "waiting_for_video", "contest_id": admin_current_id}
-                send_telegram_message(chat_id, "🎬 أرسل الآن **الفيديو** الذي تريد أن يظهر على المنشور:")
-                return '', 200
-            elif data_action == 'broadcast_menu':
-                user_steps[chat_id] = {"step": "waiting_for_broadcast"}
-                send_telegram_message(chat_id, "📢 أرسل الآن الرسالة التي تريد بثها كرسالة جماعية:")
-                return '', 200
-
-            link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
-            text = (
-                f"🤖 **لوحة التحكم بالبوت**\n\n"
-                f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
-                f"🔗 **الرابط المعتمد:**\n`{link}`"
-            )
-            markup = {
-                "inline_keyboard": [
-                    [{"text": "⬅️ السابق", "callback_data": "prev_id"}, {"text": "التالي ➡️", "callback_data": "next_id"}],
-                    [{"text": "✏️ تعديل الرقم يدوياً", "callback_data": "edit_id"}],
-                    [{"text": "✅ الرابط سليم (ابدأ النشر)", "callback_data": "approve_contest"}],
-                    [{"text": "📢 رسالة جماعية", "callback_data": "broadcast_menu"}]
-                ]
-            }
-            requests.post(f"https://api.telegram.org/bot{TOKEN}/editMessageText", json={
-                "chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown", "reply_markup": markup
-            })
-
-        # 2. معالجة الرسائل
-        elif "message" in data:
-            msg = data["message"]
-            chat_id = msg["chat"]["id"]
-            from_id = msg["from"]["id"]
-            text = msg.get("text", "")
-            
-            # رد المستخدم العادي عند الضغط على /start
-            if from_id != ADMIN_ID:
-                welcome_text = "أهلاً بك! 👋 استخدم البوت للوصول للمسابقات والمشاركة.\n\nإنضم لقناة البوت لتتابع جميع المسابقات:"
-                welcome_keyboard = {
-                    "inline_keyboard": [
-                        [{"text": "📢 قناة البوت الرسمية", "url": f"https://t.me/{CHANNEL_ID.replace('@', '')}"}]
-                    ]
-                }
-                send_telegram_message(chat_id, welcome_text, welcome_keyboard)
-                return '', 200
-
-            admin_current_id = int(get_setting("contest_id", "893"))
-
-            # رد الأدمن
-            if text == "/start" or text == "/admin":
-                user_steps[chat_id] = {}
-                link = f"https://t.me/Randomalbot?startapp=contest_{admin_current_id}__r8557464787"
-                text_msg = (
-                    f"🤖 **مرحباً بك في لوحة تحكم البوت**\n\n"
-                    f"📌 **رقم المسابقة الحالي:** `{admin_current_id}`\n"
-                    f"🔗 **الرابط المعتمد:**\n`{link}`\n\n"
-                    f"👇 اختر الإجراء المناسب:"
-                )
-                markup = {
-                    "inline_keyboard": [
-                        [{"text": "⬅️ السابق", "callback_data": "prev_id"}, {"text": "التالي ➡️", "callback_data": "next_id"}],
-                        [{"text": "✏️ تعديل الرقم يدوياً", "callback_data": "edit_id"}],
-                        [{"text": "📢 رسالة جماعية", "callback_data": "broadcast_menu"}]
-                    ]
-                }
-                send_telegram_message(chat_id, text_msg, markup)
-                
-            elif chat_id in user_steps and user_steps[chat_id]:
-                current_state = user_steps[chat_id].get("step")
-
-                if current_state == "waiting_for_broadcast":
-                    user_steps[chat_id] = {}
-                    users = get_all_users()
-                    send_telegram_message(chat_id, f"⏳ جاري بث الرسالة لـ {len(users)} مستخدمين...")
-                    count = 0
-                    for u_id in users:
-                        try:
-                            send_telegram_message(u_id, text)
-                            count += 1
-                        except Exception:
-                            pass
-                    send_telegram_message(chat_id, f"✅ تم إرسال البث لـ {count} مستخدم بنجاح!")
-
-                elif current_state == "waiting_for_custom_id":
-                    try:
-                        new_id = int(text.strip())
-                        set_setting("contest_id", new_id)
-                        user_steps[chat_id] = {}
-                        link = f"https://t.me/Randomalbot?startapp=contest_{new_id}__r8557464787"
-                        send_telegram_message(chat_id, f"💾 **تم حفظ الرقم الجديد:** `{new_id}`\n🔗 الرابط:\n`{link}`")
-                    except ValueError:
-                        send_telegram_message(chat_id, "❌ أرسل رقماً صحيحاً فقط!")
-                        
-                elif current_state == "waiting_for_video":
-                    if "video" in msg:
-                        user_steps[chat_id]["video_id"] = msg["video"]["file_id"]
-                        user_steps[chat_id]["step"] = "waiting_for_title"
-                        send_telegram_message(chat_id, "🆓 أدخل **نوع التوزيع / العنوان** (مثال: `توزيع النجوم`):")
-                    else:
-                        send_telegram_message(chat_id, "❌ يرجى إرسال فيديو صحيح!")
-
-                elif current_state == "waiting_for_title":
-                    user_steps[chat_id]["title"] = text.strip()
-                    user_steps[chat_id]["step"] = "waiting_for_prizes_detail"
-                    send_telegram_message(chat_id, "🎁 أدخل **عدد الفائزين والجوائز** (مثال: `4 فائزين . لكل منهم 50 نجمة`):")
-                    
-                elif current_state == "waiting_for_prizes_detail":
-                    user_steps[chat_id]["prizes_detail"] = text.strip()
-                    user_steps[chat_id]["step"] = "waiting_for_time"
-                    send_telegram_message(chat_id, "⏰ أدخل **الوقت المتبقي** (مثال: `4 ساعات و 57 دقيقة`):")
-                    
-                elif current_state == "waiting_for_time":
-                    time_left = text.strip()
-                    state_data = user_steps[chat_id]
-                    contest_id = state_data.get("contest_id")
-                    video_id = state_data.get("video_id")
-                    title = state_data.get("title")
-                    prizes_detail = state_data.get("prizes_detail")
-                    
-                    user_steps[chat_id] = {}
-                    
-                    approved_contest_link = f"https://t.me/Randomalbot?startapp=contest_{contest_id}__r8557464787"
-                    
-                    caption = (
-                        f"🆓 {title}\n\n"
-                        f"🎁 الجوائز:\n"
-                        f"🏆 {prizes_detail} ⭐\n\n"
-                        f"⏰ الوقت المتبقي: {time_left}\n\n"
-                        f"👇 لا تفوت فرصة المشاركة!"
-                    )
-                    
-                    keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "🚀 شارك في السحب الآن", "url": approved_contest_link}]
-                        ]
-                    }
-                    
-                    # 1. النشر في القناة الأساسية
-                    send_telegram_video(CHANNEL_ID, video_id, caption, keyboard)
-                    
-                    # 2. تنبيه للمستخدمين في المحادثة الخاصة داخل البوت مع رابط القناة
-                    alert_text = "🚨 تنبيه مسابقة جديدة في قناة البوت!"
-                    alert_keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "📢 قناة البوت الرسمية", "url": f"https://t.me/{CHANNEL_ID.replace('@', '')}"}]
-                        ]
-                    }
-                    
-                    all_u = get_all_users()
-                    for u_id in all_u:
-                        try:
-                            send_telegram_message(u_id, alert_text, alert_keyboard)
-                        except Exception:
-                            pass
-
-                    send_telegram_message(chat_id, "✅ **تم نشر المسابقة في القناة وإرسال تنبيه المسابقة الجديدة لجميع المستخدمين بنجاح!**\n\nاكتب /admin للعودة.")
-
+    if cq:
+        handle_callback(cq)
         return '', 200
-    return 'OK', 200
+
+    if not msg:
+        return '', 200
+
+    chat_id = msg["chat"]["id"]
+    from_id = msg["from"]["id"]
+    text = msg.get("text", "").strip()
+
+    conn = get_db()
+    u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+    
+    # Process Referral
+    ref_id = None
+    if text.startswith("/start") and " " in text:
+        parts = text.split(" ")
+        if len(parts) > 1 and parts[1].isdigit():
+            ref_id = int(parts[1])
+
+    if not u:
+        if ref_id and ref_id != from_id:
+            conn.execute("INSERT OR IGNORE INTO users (user_id, referred_by) VALUES (?, ?)", (from_id, ref_id))
+        else:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (from_id,))
+        conn.commit()
+        u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+    conn.close()
+
+    lang = u["language"]
+    t = TEXTS[lang]
+
+    # Handle Admin Controls First
+    if from_id == ADMIN_ID and handle_admin_messages(chat_id, text, msg):
+        return '', 200
+
+    # 1. Verification Gate (ZORO System)
+    if not u["verified"]:
+        verify_markup = {
+            "inline_keyboard": [[
+                {"text": "🛡️ التحقق من الجهاز (Verify Device)", "web_app": {"url": f"{BASE_URL}/verify"}}
+            ]]
+        }
+        send_message(chat_id, t["verify_req"], verify_markup)
+        return '', 200
+
+    # 2. Forced Subscription Check
+    unsub = check_forced_subscriptions(from_id)
+    if unsub:
+        buttons = []
+        for index, ch in enumerate(unsub, 1):
+            buttons.append([{"text": f"📢 القناة {index}", "url": ch["invite_link"]}])
+        buttons.append([{"text": t["check_sub_btn"], "callback_data": "check_sub"}])
+        send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
+        return '', 200
+
+    # 3. Main Menu Operations
+    if text in ["/start", "الرئيسية", "Main"]:
+        send_message(chat_id, t["welcome"], get_main_keyboard(lang))
+
+    elif text in ["🌐 تغيير اللغة", "🌐 Change Language"]:
+        lang_kb = {
+            "inline_keyboard": [
+                [{"text": "🇸🇦 العربية", "callback_data": "set_lang_ar"}, {"text": "🇺🇸 English", "callback_data": "set_lang_en"}]
+            ]
+        }
+        send_message(chat_id, t["lang_select"], lang_kb)
+
+    elif text == t["btn_ref"]:
+        conn = get_db()
+        cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (from_id,)).fetchone()[0]
+        conn.close()
+        ref_link = f"https://t.me/{(send_telegram_request('getMe', {}) or {}).get('result', {}).get('username')}?start={from_id}"
+        send_message(chat_id, t["ref_text"].format(link=ref_link, count=cnt))
+
+    elif text == t["btn_tasks"]:
+        send_message(chat_id, t["tasks_text"])
+
+    elif text == t["btn_withdraw"]:
+        conn = get_db()
+        bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
+        conn.close()
+        if bal < 0.10:
+            send_message(chat_id, t["withdraw_min_err"].format(bal=bal))
+        else:
+            user_steps[from_id] = "waiting_binance_id"
+            send_message(chat_id, t["withdraw_prompt"].format(bal=bal))
+
+    elif user_steps.get(from_id) == "waiting_binance_id":
+        user_steps[from_id] = None
+        binance_id = text
+        conn = get_db()
+        bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
+        if bal >= 0.10:
+            conn.execute("UPDATE users SET balance=0 WHERE user_id=?", (from_id,))
+            conn.execute("INSERT INTO withdrawals (user_id, amount, binance_id) VALUES (?, ?, ?)", (from_id, bal, binance_id))
+            conn.commit()
+            send_message(chat_id, t["withdraw_success"].format(bal=bal, bid=binance_id))
+            send_message(ADMIN_ID, f"📥 **طلب سحب جديد:**\n👤 المستخدم: `{from_id}`\n💰 المبلغ: ${bal:.2f}\n🆔 Binance ID: `{binance_id}`")
+        else:
+            send_message(chat_id, t["withdraw_min_err"].format(bal=bal))
+        conn.close()
+
+    return '', 200
+
+# ----------------- Callbacks & Admin Control ----------------- #
+
+def handle_callback(cq):
+    from_id = cq["from"]["id"]
+    chat_id = cq["message"]["chat"]["id"]
+    data = cq["data"]
+
+    if data.startswith("set_lang_"):
+        new_lang = data.split("_")[2]
+        conn = get_db()
+        conn.execute("UPDATE users SET language=? WHERE user_id=?", (new_lang, from_id))
+        conn.commit()
+        conn.close()
+        send_message(chat_id, TEXTS[new_lang]["lang_changed"], get_main_keyboard(new_lang))
+
+    elif data == "check_sub":
+        unsub = check_forced_subscriptions(from_id)
+        lang = get_user_lang(from_id)
+        if not unsub:
+            conn = get_db()
+            u = conn.execute("SELECT referred_by, verified FROM users WHERE user_id=?", (from_id,)).fetchone()
+            if u and u["referred_by"]:
+                ref_user = conn.execute("SELECT user_id FROM users WHERE user_id=?", (u["referred_by"],)).fetchone()
+                if ref_user:
+                    conn.execute("UPDATE users SET balance = balance + 0.01 WHERE user_id=?", (u["referred_by"],))
+                    send_message(u["referred_by"], "🎉 **لقد حصلت على 0.01$ لإحالة مستخدم جديد!**")
+                    conn.execute("UPDATE users SET referred_by=NULL WHERE user_id=?", (from_id,))
+                    conn.commit()
+            conn.close()
+            send_message(chat_id, TEXTS[lang]["welcome"], get_main_keyboard(lang))
+        else:
+            send_message(chat_id, "❌ لم تقم بالاشتراك في جميع القنوات بعد!")
+
+def handle_admin_messages(chat_id, text, msg):
+    if text in ["/admin", "لوحة الأدمن"]:
+        admin_kb = {
+            "inline_keyboard": [
+                [{"text": "➕ إضافة قناة اشتراك", "callback_data": "adm_add_ch"}, {"text": "➖ حذف قناة اشتراك", "callback_data": "adm_del_ch"}],
+                [{"text": "📢 إذاعة جماعية (متطورة)", "callback_data": "adm_broadcast"}]
+            ]
+        }
+        send_message(chat_id, "🛠️ **لوحة تحكم الأدمن:**", admin_kb)
+        return True
+
+    state = user_steps.get(chat_id)
+    if state == "waiting_add_ch":
+        user_steps[chat_id] = None
+        parts = text.split()
+        if len(parts) >= 2:
+            ch_id, ch_link = parts[0], parts[1]
+            conn = get_db()
+            conn.execute("INSERT OR REPLACE INTO channels (channel_id, invite_link) VALUES (?, ?)", (ch_id, ch_link))
+            conn.commit()
+            conn.close()
+            send_message(chat_id, f"✅ تم إضافة القناة `{ch_id}` بنجاح!")
+        else:
+            send_message(chat_id, "❌ صيغة غير صحيحة! قم بإرسال: `@ChannelUsername https://t.me/...`")
+        return True
+
+    elif state == "waiting_del_ch":
+        user_steps[chat_id] = None
+        conn = get_db()
+        conn.execute("DELETE FROM channels WHERE channel_id=?", (text.strip(),))
+        conn.commit()
+        conn.close()
+        send_message(chat_id, f"🗑️ تم حذف القناة `{text}` إن وجدت!")
+        return True
+
+    elif state == "waiting_broadcast":
+        user_steps[chat_id] = None
+        conn = get_db()
+        all_u = conn.execute("SELECT user_id FROM users").fetchall()
+        conn.close()
+
+        count = 0
+        photo = msg.get("photo", [{}])[-1].get("file_id") if "photo" in msg else None
+        caption = msg.get("caption") or text
+
+        for row in all_u:
+            u_id = row["user_id"]
+            try:
+                if photo:
+                    send_photo(u_id, photo, caption)
+                else:
+                    send_message(u_id, caption)
+                count += 1
+            except Exception:
+                pass
+        send_message(chat_id, f"✅ تم إرسال الإذاعة لـ {count} مستخدم بنجاح!")
+        return True
+
+    return False
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بكفاءة!"
+    return "🤖 البوت يعمل بكفاءة مع نظام ZORO والمهام المجانية!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
