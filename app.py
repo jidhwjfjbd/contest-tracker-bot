@@ -324,33 +324,38 @@ def webhook():
     text = msg.get("text", "").strip()
 
     conn = get_db()
+    
+    # جلب أو تسجيل المستخدم
     u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
     
-    # Process Referral Link Param
-    ref_id = None
-    if text.startswith("/start") and " " in text:
-        parts = text.split(" ")
-        if len(parts) > 1 and parts[1].isdigit():
-            ref_id = int(parts[1])
-
+    # تسجيل الإحالة إن وجدت
     if not u:
+        ref_id = None
+        if text.startswith("/start") and " " in text:
+            parts = text.split(" ")
+            if len(parts) > 1 and parts[1].isdigit():
+                ref_id = int(parts[1])
+        
         if ref_id and ref_id != from_id:
             conn.execute("INSERT OR IGNORE INTO users (user_id, referred_by, verified) VALUES (?, ?, 0)", (from_id, ref_id))
         else:
             conn.execute("INSERT OR IGNORE INTO users (user_id, verified) VALUES (?, 0)", (from_id,))
         conn.commit()
         u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+
+    # القراءة الفورية والمباشرة لحالة التحقق واللغة
+    is_verified = u["verified"] if u else 0
+    lang = u["language"] if u else "ar"
     conn.close()
 
-    lang = u["language"] if u else "ar"
-    t = TEXTS[lang]
+    t = TEXTS.get(lang, TEXTS["ar"])
 
-    # Handle Admin Controls First
+    # الأدمن يتجاوز التحقق دائماً
     if from_id == ADMIN_ID and handle_admin_messages(chat_id, text, msg):
         return '', 200
 
-    # 1. Verification Gate
-    if not u["verified"]:
+    # 1. Verification Gate (التحقق الفوري)
+    if not is_verified:
         verify_markup = {
             "inline_keyboard": [[
                 {"text": "🛡️ التحقق من الجهاز (Verify Device)", "web_app": {"url": f"{BASE_URL}/verify"}}
@@ -369,7 +374,7 @@ def webhook():
         send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
         return '', 200
 
-    # 3. Handling Pending Steps (Withdrawal Logic)
+    # 3. Handling Pending Steps (منطق السحب خطوة بخطوة)
     state = user_steps.get(from_id)
     
     if isinstance(state, str) and state == "waiting_withdraw_amount":
@@ -410,7 +415,7 @@ def webhook():
         conn.close()
         return '', 200
 
-    # 4. Main Menu Buttons Processing (طريقة الكلمات المفتاحية المضمونة)
+    # 4. Main Menu Buttons Processing (فحص واسع النطاق يضم كافة الحالات)
     if text in ["/start", "الرئيسية", "Main"]:
         user_steps[from_id] = None
         send_message(chat_id, t["welcome"], get_main_keyboard(lang))
@@ -425,7 +430,7 @@ def webhook():
         cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (from_id,)).fetchone()[0]
         conn.close()
         bot_res = send_telegram_request('getMe', {}) or {}
-        bot_username = bot_res.get('result', {}).get('username', 'NeoEarnBot')
+        bot_username = bot_res.get('result', {}).get('username', '')
         ref_link = f"https://t.me/{bot_username}?start={from_id}"
         send_message(chat_id, t["ref_text"].format(link=ref_link, count=cnt))
 
@@ -542,7 +547,7 @@ def handle_admin_messages(chat_id, text, msg):
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بكفاءة مع خيارات السحب والإحالة المحدثة!"
+    return "🤖 البوت يعمل بكفاءة وحساب التحقق يحدث لحظياً!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
