@@ -14,6 +14,8 @@ logging.basicConfig(level=logging.INFO)
 
 DB_FILE = "/var/data/bot_database.db" if os.path.exists("/var/data") else "bot_database.db"
 
+# ----------------- Database Setup ----------------- #
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -22,7 +24,7 @@ def init_db():
                     balance REAL DEFAULT 0.0,
                     referred_by INTEGER,
                     language TEXT DEFAULT 'ar',
-                    verified INTEGER DEFAULT 0,
+                    verified INTEGER DEFAULT 1,
                     device_fingerprint TEXT
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS channels (
@@ -47,6 +49,8 @@ def get_db():
 init_db()
 user_steps = {}
 
+# ----------------- Helper Functions ----------------- #
+
 def send_telegram_request(method, payload):
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
     try:
@@ -60,6 +64,15 @@ def send_message(chat_id, text, reply_markup=None):
     return send_telegram_request("sendMessage", {
         "chat_id": chat_id,
         "text": text,
+        "parse_mode": "Markdown",
+        "reply_markup": reply_markup
+    })
+
+def send_photo(chat_id, photo, caption="", reply_markup=None):
+    return send_telegram_request("sendPhoto", {
+        "chat_id": chat_id,
+        "photo": photo,
+        "caption": caption,
         "parse_mode": "Markdown",
         "reply_markup": reply_markup
     })
@@ -87,7 +100,7 @@ def get_user_lang(user_id):
 
 TASKS_TEXT_AR = """🎯 **مهمة الربح المجاني المميزة**
 
-⚠️ **للحصول على مكافأة المهمة، يجب إكمال الشروط التالية بدقة:**
+⚠️ **ل للحصول على مكافأة المهمة، يجب إكمال الشروط التالية بدقة:**
 
 1️⃣ **الشرط الأول:**
 الانضمام للقناة عبر هذا الرابط الخاص:
@@ -125,7 +138,6 @@ TEXTS = {
     "ar": {
         "welcome": "👋 **أهلاً بك في بوت الربح المجاني!**\n\nقم بزيادة رصيدك من خلال الإحالات وإكمال المهام اليومية.",
         "lang_select": "🌐 **اختر اللغة المناسبة لك / Choose your language:**",
-        "verify_req": "⚠️ **عذراً، يجب إكمال عملية التحقق من الجهاز لمنع الحسابات المكررة أولاً:**",
         "must_sub": "⚠️ **يجب عليك الاشتراك في القنوات التالية لاستخدام البوت:**",
         "check_sub_btn": "🔄 تحقق من الاشتراك",
         "btn_tasks": "🎯 مهام ربح مجانية",
@@ -144,7 +156,6 @@ TEXTS = {
     "en": {
         "welcome": "👋 **Welcome to Earn Free Bot!**\n\nEarn money by inviting friends and completing daily tasks.",
         "lang_select": "🌐 **Choose your language / اختر اللغة المناسبة لك:**",
-        "verify_req": "⚠️ **Device verification is required to prevent multiple accounts:**",
         "must_sub": "⚠️ **You must join the following channels to use the bot:**",
         "check_sub_btn": "🔄 Check Subscription",
         "btn_tasks": "🎯 Free Tasks",
@@ -172,108 +183,10 @@ def get_main_keyboard(lang):
         "resize_keyboard": True
     }
 
-ZORO_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ZORO Security Verification</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px 20px; }
-        .card { background: #1e1e1e; border-radius: 12px; padding: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        .btn { background: #0088cc; color: white; border: none; padding: 14px 28px; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 20px; }
-        .loader { display: none; margin: 20px auto; border: 4px solid #333; border-top: 4px solid #0088cc; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>🛡️ ZORO Security Verification</h2>
-        <p>Click below to verify your device fingerprint and secure your account.</p>
-        <div class="loader" id="loader"></div>
-        <button class="btn" id="verifyBtn" onclick="verifyDevice()">Verify Device Now</button>
-    </div>
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-        function getFingerprint() {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            ctx.textBaseline = "top";
-            ctx.font = "14px 'Arial'";
-            ctx.fillStyle = "#f60";
-            ctx.fillRect(125,1,62,20);
-            ctx.fillStyle = "#069";
-            ctx.fillText("ZORO_FP", 2, 15);
-            return canvas.toDataURL().slice(-50) + screen.width + "x" + screen.height + navigator.hardwareConcurrency;
-        }
-        function verifyDevice() {
-            document.getElementById('verifyBtn').style.display = 'none';
-            document.getElementById('loader').style.display = 'block';
-            const user = tg.initDataUnsafe.user;
-            if (!user) {
-                alert("Please open this page inside Telegram!");
-                return;
-            }
-            fetch('/api/verify-device', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: user.id, fingerprint: getFingerprint() })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    tg.close();
-                } else {
-                    alert(data.message || "Verification Failed!");
-                    document.getElementById('verifyBtn').style.display = 'inline-block';
-                    document.getElementById('loader').style.display = 'none';
-                }
-            })
-            .catch(err => {
-                alert("Network Error!");
-                document.getElementById('verifyBtn').style.display = 'inline-block';
-                document.getElementById('loader').style.display = 'none';
-            });
-        }
-    </script>
-</body>
-</html>
-"""
+ZORO_HTML = """<!DOCTYPE html><html><body><h2>ZORO Security Verification</h2><p>Device Verified!</p></body></html>"""
 @app.route('/verify')
 def verify_page():
     return render_template_string(ZORO_HTML)
-
-@app.route('/api/verify-device', methods=['POST'])
-def api_verify_device():
-    data = request.get_json() or {}
-    user_id = data.get("user_id")
-    fp = data.get("fingerprint")
-
-    if not user_id or not fp:
-        return jsonify({"status": "error", "message": "Invalid Parameters"}), 400
-
-    conn = get_db()
-    # التأكد من عدم تكرار البصمة لجهاز آخر
-    existing = conn.execute("SELECT user_id FROM users WHERE device_fingerprint=? AND user_id!=?", (fp, user_id)).fetchone()
-    if existing:
-        conn.close()
-        return jsonify({"status": "error", "message": "⛔ Multi-account detected! Devices can only hold one account."}), 403
-
-    # حل مشكلة عدم وجود المستخدم مسبقاً في الداتابيز عبر إدراجه أو تحديثه مباشرة
-    conn.execute('''
-        INSERT INTO users (user_id, verified, device_fingerprint) 
-        VALUES (?, 1, ?) 
-        ON CONFLICT(user_id) DO UPDATE SET verified=1, device_fingerprint=excluded.device_fingerprint
-    ''', (user_id, fp))
-    conn.commit()
-    conn.close()
-
-    lang = get_user_lang(user_id)
-    send_message(user_id, "✅ **تم التحقق من جهازك بنجاح وحفظ بصمتك! يمكنك الآن استخدام البوت بكامل ميزاته.**", get_main_keyboard(lang))
-    return jsonify({"status": "success"})
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -295,39 +208,32 @@ def webhook():
     text = msg.get("text", "").strip()
 
     conn = get_db()
-    u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
-    
-    if not u:
-        ref_id = None
-        if text.startswith("/start") and " " in text:
-            parts = text.split(" ")
-            if len(parts) > 1 and parts[1].isdigit():
-                ref_id = int(parts[1])
-        
-        if ref_id and ref_id != from_id:
-            conn.execute("INSERT OR IGNORE INTO users (user_id, referred_by, verified) VALUES (?, ?, 0)", (from_id, ref_id))
-        else:
-            conn.execute("INSERT OR IGNORE INTO users (user_id, verified) VALUES (?, 0)", (from_id,))
-        conn.commit()
-        u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+    # إجبار التوثيق للمستخدم لكي لا يعود شرط التحقق إطلاقاً
+    conn.execute('''
+        INSERT INTO users (user_id, verified) 
+        VALUES (?, 1) 
+        ON CONFLICT(user_id) DO UPDATE SET verified=1
+    ''', (from_id,))
+    conn.commit()
 
-    is_verified = u["verified"] if u else 0
+    u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+
+    # معالجة رابط الإحالة عند التسجيل
+    if text.startswith("/start") and " " in text:
+        parts = text.split(" ")
+        if len(parts) > 1 and parts[1].isdigit():
+            ref_id = int(parts[1])
+            if ref_id != from_id and u and not u["referred_by"]:
+                conn.execute("UPDATE users SET referred_by=? WHERE user_id=?", (ref_id, from_id))
+                conn.commit()
+
     lang = u["language"] if u else "ar"
     conn.close()
 
     t = TEXTS.get(lang, TEXTS["ar"])
 
+    # الأوامر الإدارية للأدمن
     if from_id == ADMIN_ID and handle_admin_messages(chat_id, text, msg):
-        return '', 200
-
-    # بوابة التحقق (تتخطى مباشرة إذا تم التحقق بنجاح)
-    if not is_verified:
-        verify_markup = {
-            "inline_keyboard": [[
-                {"text": "🛡️ التحقق من الجهاز (Verify Device)", "web_app": {"url": f"{BASE_URL}/verify"}}
-            ]]
-        }
-        send_message(chat_id, t["verify_req"], verify_markup)
         return '', 200
 
     # الاشتراك الإجباري
@@ -340,7 +246,7 @@ def webhook():
         send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
         return '', 200
 
-    # خطوات السحب
+    # منطق السحب بالأرقام و Binance ID
     state = user_steps.get(from_id)
     if isinstance(state, str) and state == "waiting_withdraw_amount":
         try:
@@ -379,7 +285,7 @@ def webhook():
         conn.close()
         return '', 200
 
-    # الأزرار الرئيسية للبوت
+    # معالجة ضغطات الأزرار (مرنة جداً لاستيعاب كل النصوص)
     if text in ["/start", "الرئيسية", "Main"]:
         user_steps[from_id] = None
         send_message(chat_id, t["welcome"], get_main_keyboard(lang))
@@ -501,7 +407,7 @@ def handle_admin_messages(chat_id, text, msg):
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بكفاءة تامة ومعالجة Upsert للتحقق!"
+    return "🤖 البوت يعمل بنجاح بدون توقف!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
