@@ -369,29 +369,22 @@ def webhook():
         send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
         return '', 200
 
-    # 3. Main Menu Operations
+    # 3. Main Menu Operations (مع فحص الكلمات المفتاحية لضمان عمل الأزرار تماماً)
     if text in ["/start", "الرئيسية", "Main"]:
         send_message(chat_id, t["welcome"], get_main_keyboard(lang))
 
-    elif text in ["🌐 تغيير اللغة", "🌐 Change Language"]:
-        lang_kb = {
-            "inline_keyboard": [
-                [{"text": "🇸🇦 العربية", "callback_data": "set_lang_ar"}, {"text": "🇺🇸 English", "callback_data": "set_lang_en"}]
-            ]
-        }
-        send_message(chat_id, t["lang_select"], lang_kb)
+    elif "مهام" in text or "Tasks" in text:
+        send_message(chat_id, t["tasks_text"])
 
-    elif text == t["btn_ref"]:
+    elif "إحالة" in text or "Referral" in text:
         conn = get_db()
         cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (from_id,)).fetchone()[0]
         conn.close()
-        ref_link = f"https://t.me/{(send_telegram_request('getMe', {}) or {}).get('result', {}).get('username')}?start={from_id}"
+        bot_username = (send_telegram_request('getMe', {}) or {}).get('result', {}).get('username', '')
+        ref_link = f"https://t.me/{bot_username}?start={from_id}"
         send_message(chat_id, t["ref_text"].format(link=ref_link, count=cnt))
 
-    elif text == t["btn_tasks"]:
-        send_message(chat_id, t["tasks_text"])
-
-    elif text == t["btn_withdraw"]:
+    elif "سحب" in text or "Withdraw" in text:
         conn = get_db()
         bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
         conn.close()
@@ -400,6 +393,14 @@ def webhook():
         else:
             user_steps[from_id] = "waiting_binance_id"
             send_message(chat_id, t["withdraw_prompt"].format(bal=bal))
+
+    elif "لغة" in text or "Language" in text:
+        lang_kb = {
+            "inline_keyboard": [
+                [{"text": "🇸🇦 العربية", "callback_data": "set_lang_ar"}, {"text": "🇺🇸 English", "callback_data": "set_lang_en"}]
+            ]
+        }
+        send_message(chat_id, t["lang_select"], lang_kb)
 
     elif user_steps.get(from_id) == "waiting_binance_id":
         user_steps[from_id] = None
