@@ -23,8 +23,7 @@ def init_db():
                     user_id INTEGER PRIMARY KEY,
                     balance REAL DEFAULT 0.0,
                     referred_by INTEGER,
-                    language TEXT DEFAULT 'ar',
-                    verified INTEGER DEFAULT 1,
+                    verified INTEGER DEFAULT 0,
                     device_fingerprint TEXT
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS channels (
@@ -92,15 +91,11 @@ def check_forced_subscriptions(user_id):
             unsubscribed.append(ch)
     return unsubscribed
 
-def get_user_lang(user_id):
-    conn = get_db()
-    u = conn.execute("SELECT language FROM users WHERE user_id=?", (user_id,)).fetchone()
-    conn.close()
-    return u["language"] if u else "ar"
+# ----------------- Texts & Translations (Arabic Only) ----------------- #
 
-TASKS_TEXT_AR = """🎯 **مهمة الربح المجاني المميزة**
+TASKS_TEXT = """🎯 **مهمة الربح المجاني المميزة**
 
-⚠️ **ل للحصول على مكافأة المهمة، يجب إكمال الشروط التالية بدقة:**
+⚠️ **للحصول على مكافأة المهمة، يجب إكمال الشروط التالية بدقة:**
 
 1️⃣ **الشرط الأول:**
 الانضمام للقناة عبر هذا الرابط الخاص:
@@ -116,77 +111,133 @@ TASKS_TEXT_AR = """🎯 **مهمة الربح المجاني المميزة**
 
 📩 **لإرسال الإثباتات والاستفسار:** @tawsiatKE"""
 
-TASKS_TEXT_EN = """🎯 **Free Reward Task**
+TEXT_WELCOME = "👋 **أهلاً بك في بوت الربح المجاني!**\n\nقم بزيادة رصيدك من خلال الإحالات وإكمال المهام اليومية."
+TEXT_VERIFY_REQ = "⚠️ **عذراً، يجب إكمال عملية التحقق من الجهاز لمنع الحسابات المكررة أولاً:**"
+TEXT_MUST_SUB = "⚠️ **يجب عليك الاشتراك في القنوات التالية لاستخدام البوت:**"
+BTN_CHECK_SUB = "🔄 تحقق من الاشتراك"
 
-⚠️ **To claim your task reward, you must complete the following steps carefully:**
+BTN_TASKS = "🎯 مهام ربح مجانية"
+BTN_REF = "🔗 رابط الإحالة"
+BTN_WITHDRAW = "💸 طلب السحب"
 
-1️⃣ **First Condition:**
-Join the channel via this private link:
-👉 https://t.me/+4jDGJ8ZM2XI2NzQ0
-Take a screenshot proving you joined, and send it to: @tawsiatKE
-
-2️⃣ **Second Condition:**
-Take a screenshot of your Profile showing your **Account ID** and that it is **Verified**, then send it to: @tawsiatKE
-*(This is strictly required to detect fake or photo-edited accounts)*.
-
-3️⃣ **Third & Most Important Condition (Between you and God):**
-Do not leave the channel after receiving your reward. Doing so violates all terms, and your earnings will **not be permissible (حرام/Halal concern)** even if it is just $0.05.
-
-📩 **Send proof to:** @tawsiatKE"""
-
-TEXTS = {
-    "ar": {
-        "welcome": "👋 **أهلاً بك في بوت الربح المجاني!**\n\nقم بزيادة رصيدك من خلال الإحالات وإكمال المهام اليومية.",
-        "lang_select": "🌐 **اختر اللغة المناسبة لك / Choose your language:**",
-        "must_sub": "⚠️ **يجب عليك الاشتراك في القنوات التالية لاستخدام البوت:**",
-        "check_sub_btn": "🔄 تحقق من الاشتراك",
-        "btn_tasks": "🎯 مهام ربح مجانية",
-        "btn_ref": "🔗 رابط الإحالة",
-        "btn_withdraw": "💸 طلب السحب",
-        "btn_lang": "🌐 تغيير اللغة",
-        "ref_text": "🔗 **رابط الإحالة الخاص بك:**\n`{link}`\n\n🎁 **مكافأة كل إحالة:** 0.01$\n👥 **عدد إحالاتك:** {count}",
-        "tasks_text": TASKS_TEXT_AR,
-        "withdraw_enter_amount": "💰 **رصيدك الحالي:** ${bal:.2f}\n\nالحد الأدنى للسحب هو **0.10$**.\nالرجاء كتابة المبلغ الذي تريد سحبه الآن:",
-        "withdraw_min_err": "❌ **المبلغ المكتوب (${amt:.2f}) أقل من الحد الأدنى للسحب (0.10$)!**",
-        "withdraw_bal_err": "❌ **المبلغ المطلوب (${amt:.2f}) أكثر من رصيدك الحالي (${bal:.2f})!**",
-        "withdraw_prompt_binance": "💳 **المبلغ المراد سحبه:** ${amt:.2f}\n\nالرجاء إرسال **Binance ID** الخاص بك الآن لاستلام السحب:",
-        "withdraw_success": "✅ **تم تسجيل طلب السحب بنجاح!**\n💰 المبلغ: ${amt:.2f}\n🆔 Binance ID: `{bid}`",
-        "lang_changed": "✅ تم تغيير اللغة بنجاح إلى العربية!"
-    },
-    "en": {
-        "welcome": "👋 **Welcome to Earn Free Bot!**\n\nEarn money by inviting friends and completing daily tasks.",
-        "lang_select": "🌐 **Choose your language / اختر اللغة المناسبة لك:**",
-        "must_sub": "⚠️ **You must join the following channels to use the bot:**",
-        "check_sub_btn": "🔄 Check Subscription",
-        "btn_tasks": "🎯 Free Tasks",
-        "btn_ref": "🔗 Referral Link",
-        "btn_withdraw": "💸 Withdraw",
-        "btn_lang": "🌐 Change Language",
-        "ref_text": "🔗 **Your Referral Link:**\n`{link}`\n\n🎁 **Reward per referral:** $0.01\n👥 **Total Referrals:** {count}",
-        "tasks_text": TASKS_TEXT_EN,
-        "withdraw_enter_amount": "💰 **Your Balance:** ${bal:.2f}\n\nMinimum withdrawal is **$0.10**.\nPlease enter the amount you wish to withdraw:",
-        "withdraw_min_err": "❌ **The entered amount (${amt:.2f}) is below the minimum ($0.10)!**",
-        "withdraw_bal_err": "❌ **The requested amount (${amt:.2f}) exceeds your balance (${bal:.2f})!**",
-        "withdraw_prompt_binance": "💳 **Withdrawal Amount:** ${amt:.2f}\n\nPlease send your **Binance ID** now:",
-        "withdraw_success": "✅ **Withdrawal request submitted!**\n💰 Amount: ${amt:.2f}\n🆔 Binance ID: `{bid}`",
-        "lang_changed": "✅ Language changed successfully to English!"
-    }
-}
-
-def get_main_keyboard(lang):
-    t = TEXTS[lang]
+def get_main_keyboard():
     return {
         "keyboard": [
-            [{"text": t["btn_tasks"]}, {"text": t["btn_ref"]}],
-            [{"text": t["btn_withdraw"]}, {"text": t["btn_lang"]}]
+            [{"text": BTN_TASKS}, {"text": BTN_REF}],
+            [{"text": BTN_WITHDRAW}]
         ],
         "resize_keyboard": True
     }
 
-ZORO_HTML = """<!DOCTYPE html><html><body><h2>ZORO Security Verification</h2><p>Device Verified!</p></body></html>"""
+# ----------------- Web Application for Verification (ZORO Fingerprint) ----------------- #
+
+ZORO_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZORO Security Verification</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px 20px; }
+        .card { background: #1e1e1e; border-radius: 12px; padding: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        .btn { background: #0088cc; color: white; border: none; padding: 14px 28px; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 20px; }
+        .loader { display: none; margin: 20px auto; border: 4px solid #333; border-top: 4px solid #0088cc; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🛡️ نظام التحقق الأمني ZORO</h2>
+        <p>اضغط أدناه للتحقق من بصمة جهازك وتأمين حسابك.</p>
+        <div class="loader" id="loader"></div>
+        <button class="btn" id="verifyBtn" onclick="verifyDevice()">التحقق من الجهاز الآن</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        function getFingerprint() {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = "top";
+            ctx.font = "14px 'Arial'";
+            ctx.fillStyle = "#f60";
+            ctx.fillRect(125,1,62,20);
+            ctx.fillStyle = "#069";
+            ctx.fillText("ZORO_FP", 2, 15);
+            return canvas.toDataURL().slice(-50) + screen.width + "x" + screen.height + navigator.hardwareConcurrency;
+        }
+
+        function verifyDevice() {
+            document.getElementById('verifyBtn').style.display = 'none';
+            document.getElementById('loader').style.display = 'block';
+
+            const user = tg.initDataUnsafe.user;
+            if (!user) {
+                alert("الرجاء فتح هذه الصفحة داخل تطبيق تليجرام!");
+                return;
+            }
+
+            fetch('/api/verify-device', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user.id, fingerprint: getFingerprint() })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    tg.close();
+                } else {
+                    alert(data.message || "فشل التحقق!");
+                    document.getElementById('verifyBtn').style.display = 'inline-block';
+                    document.getElementById('loader').style.display = 'none';
+                }
+            })
+            .catch(err => {
+                alert("خطأ في الاتصال بالشبكة!");
+                document.getElementById('verifyBtn').style.display = 'inline-block';
+                document.getElementById('loader').style.display = 'none';
+            });
+        }
+    </script>
+</body>
+</html>
+"""
 @app.route('/verify')
 def verify_page():
     return render_template_string(ZORO_HTML)
+
+@app.route('/api/verify-device', methods=['POST'])
+def api_verify_device():
+    data = request.get_json() or {}
+    user_id = data.get("user_id")
+    fp = data.get("fingerprint")
+
+    if not user_id or not fp:
+        return jsonify({"status": "error", "message": "معلمات غير صالحة"}), 400
+
+    conn = get_db()
+    existing = conn.execute("SELECT user_id FROM users WHERE device_fingerprint=? AND user_id!=?", (fp, user_id)).fetchone()
+    
+    if existing:
+        conn.close()
+        return jsonify({"status": "error", "message": "⛔ تم كشف حساب مكرر! يُسمح بحساب واحد فقط لكل جهاز."}), 403
+
+    conn.execute('''
+        INSERT INTO users (user_id, verified, device_fingerprint) 
+        VALUES (?, 1, ?) 
+        ON CONFLICT(user_id) DO UPDATE SET verified=1, device_fingerprint=excluded.device_fingerprint
+    ''', (user_id, fp))
+    conn.commit()
+    conn.close()
+
+    send_message(user_id, "✅ **تم التحقق من جهازك بنجاح وحفظ بصمتك! يمكنك الآن استخدام البوت بكامل ميزاته.**", get_main_keyboard())
+    return jsonify({"status": "success"})
+
+# ----------------- Webhook Handling ----------------- #
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -200,6 +251,7 @@ def webhook():
     if cq:
         handle_callback(cq)
         return '', 200
+
     if not msg:
         return '', 200
 
@@ -208,46 +260,53 @@ def webhook():
     text = msg.get("text", "").strip()
 
     conn = get_db()
-    # إجبار التوثيق للمستخدم لكي لا يعود شرط التحقق إطلاقاً
-    conn.execute('''
-        INSERT INTO users (user_id, verified) 
-        VALUES (?, 1) 
-        ON CONFLICT(user_id) DO UPDATE SET verified=1
-    ''', (from_id,))
-    conn.commit()
-
     u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+    
+    # معالجة رابط الإحالة
+    if not u:
+        ref_id = None
+        if text.startswith("/start") and " " in text:
+            parts = text.split(" ")
+            if len(parts) > 1 and parts[1].isdigit():
+                ref_id = int(parts[1])
+        
+        if ref_id and ref_id != from_id:
+            conn.execute("INSERT OR IGNORE INTO users (user_id, referred_by, verified) VALUES (?, ?, 0)", (from_id, ref_id))
+        else:
+            conn.execute("INSERT OR IGNORE INTO users (user_id, verified) VALUES (?, 0)", (from_id,))
+        conn.commit()
+        u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
 
-    # معالجة رابط الإحالة عند التسجيل
-    if text.startswith("/start") and " " in text:
-        parts = text.split(" ")
-        if len(parts) > 1 and parts[1].isdigit():
-            ref_id = int(parts[1])
-            if ref_id != from_id and u and not u["referred_by"]:
-                conn.execute("UPDATE users SET referred_by=? WHERE user_id=?", (ref_id, from_id))
-                conn.commit()
-
-    lang = u["language"] if u else "ar"
+    is_verified = u["verified"] if u else 0
     conn.close()
 
-    t = TEXTS.get(lang, TEXTS["ar"])
-
-    # الأوامر الإدارية للأدمن
+    # لوحة تحكم الأدمن
     if from_id == ADMIN_ID and handle_admin_messages(chat_id, text, msg):
         return '', 200
 
-    # الاشتراك الإجباري
+    # 1. بوابَة التحقق من الجهاز (ZORO System)
+    if not is_verified:
+        verify_markup = {
+            "inline_keyboard": [[
+                {"text": "🛡️ التحقق من الجهاز (Verify Device)", "web_app": {"url": f"{BASE_URL}/verify"}}
+            ]]
+        }
+        send_message(chat_id, TEXT_VERIFY_REQ, verify_markup)
+        return '', 200
+
+    # 2. فحص الاشتراك الإجباري
     unsub = check_forced_subscriptions(from_id)
     if unsub:
         buttons = []
         for index, ch in enumerate(unsub, 1):
             buttons.append([{"text": f"📢 القناة {index}", "url": ch["invite_link"]}])
-        buttons.append([{"text": t["check_sub_btn"], "callback_data": "check_sub"}])
-        send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
+        buttons.append([{"text": BTN_CHECK_SUB, "callback_data": "check_sub"}])
+        send_message(chat_id, TEXT_MUST_SUB, {"inline_keyboard": buttons})
         return '', 200
 
-    # منطق السحب بالأرقام و Binance ID
+    # 3. معالجة خطوات طلب السحب
     state = user_steps.get(from_id)
+    
     if isinstance(state, str) and state == "waiting_withdraw_amount":
         try:
             amount = float(text)
@@ -256,14 +315,14 @@ def webhook():
             conn.close()
 
             if amount < 0.10:
-                send_message(chat_id, t["withdraw_min_err"].format(amt=amount))
+                send_message(chat_id, f"❌ **المبلغ المكتوب (${amount:.2f}) أقل من الحد الأدنى للسحب (0.10$)!**\nقم بجمع المزيد من الإحالات والعودة مجدداً.")
                 user_steps[from_id] = None
             elif amount > bal:
-                send_message(chat_id, t["withdraw_bal_err"].format(amt=amount, bal=bal))
+                send_message(chat_id, f"❌ **المبلغ المطلوب (${amount:.2f}) أكثر من رصيدك الحالي (${bal:.2f})!**")
                 user_steps[from_id] = None
             else:
                 user_steps[from_id] = {"step": "waiting_binance_id", "amount": amount}
-                send_message(chat_id, t["withdraw_prompt_binance"].format(amt=amount))
+                send_message(chat_id, f"💳 **المبلغ المراد سحبه:** ${amount:.2f}\n\nالرجاء إرسال **Binance ID** الخاص بك الآن لاستلام السحب:")
         except ValueError:
             send_message(chat_id, "❌ **الرجاء كتابة رقم صحيح فقط!** (مثال: `0.15`)")
         return '', 200
@@ -272,29 +331,30 @@ def webhook():
         amount = state.get("amount", 0.0)
         binance_id = text
         user_steps[from_id] = None
+
         conn = get_db()
         bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
         if bal >= amount and amount >= 0.10:
             conn.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, from_id))
             conn.execute("INSERT INTO withdrawals (user_id, amount, binance_id) VALUES (?, ?, ?)", (from_id, amount, binance_id))
             conn.commit()
-            send_message(chat_id, t["withdraw_success"].format(amt=amount, bid=binance_id))
+            send_message(chat_id, f"✅ **تم تسجيل طلب السحب بنجاح!**\n💰 المبلغ: ${amount:.2f}\n🆔 Binance ID: `{binance_id}`\nسيتم مراجعته وإرسال المبلغ قريباً.")
             send_message(ADMIN_ID, f"📥 **طلب سحب جديد:**\n👤 المستخدم: `{from_id}`\n💰 المبلغ: ${amount:.2f}\n🆔 Binance ID: `{binance_id}`")
         else:
-            send_message(chat_id, t["withdraw_min_err"].format(amt=amount))
+            send_message(chat_id, f"❌ **المبلغ المكتوب (${amount:.2f}) أقل من الحد الأدنى للسحب (0.10$)!**")
         conn.close()
         return '', 200
 
-    # معالجة ضغطات الأزرار (مرنة جداً لاستيعاب كل النصوص)
-    if text in ["/start", "الرئيسية", "Main"]:
+    # 4. معالجة الأزرار الرئيسية
+    if text in ["/start", "الرئيسية"]:
         user_steps[from_id] = None
-        send_message(chat_id, t["welcome"], get_main_keyboard(lang))
+        send_message(chat_id, TEXT_WELCOME, get_main_keyboard())
 
-    elif any(k in text for k in ["مهام", "Tasks"]):
+    elif "مهام" in text:
         user_steps[from_id] = None
-        send_message(chat_id, t["tasks_text"])
+        send_message(chat_id, TASKS_TEXT)
 
-    elif any(k in text for k in ["إحالة", "Referral"]):
+    elif "إحالة" in text:
         user_steps[from_id] = None
         conn = get_db()
         cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (from_id,)).fetchone()[0]
@@ -302,43 +362,29 @@ def webhook():
         bot_res = send_telegram_request('getMe', {}) or {}
         bot_username = bot_res.get('result', {}).get('username', '')
         ref_link = f"https://t.me/{bot_username}?start={from_id}"
-        send_message(chat_id, t["ref_text"].format(link=ref_link, count=cnt))
+        send_message(chat_id, f"🔗 **رابط الإحالة الخاص بك:**\n`{ref_link}`\n\n🎁 **مكافأة كل إحالة:** 0.01$\n👥 **عدد إحالاتك:** {cnt}")
 
-    elif any(k in text for k in ["سحب", "Withdraw"]):
+    elif "سحب" in text:
         conn = get_db()
         bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
         conn.close()
         user_steps[from_id] = "waiting_withdraw_amount"
-        send_message(chat_id, t["withdraw_enter_amount"].format(bal=bal))
-
-    elif any(k in text for k in ["لغة", "Language"]):
-        user_steps[from_id] = None
-        lang_kb = {
-            "inline_keyboard": [
-                [{"text": "🇸🇦 العربية", "callback_data": "set_lang_ar"}, {"text": "🇺🇸 English", "callback_data": "set_lang_en"}]
-            ]
-        }
-        send_message(chat_id, t["lang_select"], lang_kb)
+        send_message(chat_id, f"💰 **رصيدك الحالي:** ${bal:.2f}\n\nالحد الأدنى للسحب هو **0.10$**.\nالرجاء كتابة المبلغ الذي تريد سحبه الآن:")
 
     return '', 200
+
+# ----------------- Callbacks & Admin Control ----------------- #
 
 def handle_callback(cq):
     from_id = cq["from"]["id"]
     chat_id = cq["message"]["chat"]["id"]
     data = cq["data"]
-    if data.startswith("set_lang_"):
-        new_lang = data.split("_")[2]
-        conn = get_db()
-        conn.execute("UPDATE users SET language=? WHERE user_id=?", (new_lang, from_id))
-        conn.commit()
-        conn.close()
-        send_message(chat_id, TEXTS[new_lang]["lang_changed"], get_main_keyboard(new_lang))
-    elif data == "check_sub":
+
+    if data == "check_sub":
         unsub = check_forced_subscriptions(from_id)
-        lang = get_user_lang(from_id)
         if not unsub:
             conn = get_db()
-            u = conn.execute("SELECT referred_by, verified FROM users WHERE user_id=?", (from_id,)).fetchone()
+            u = conn.execute("SELECT referred_by FROM users WHERE user_id=?", (from_id,)).fetchone()
             if u and u["referred_by"]:
                 ref_user = conn.execute("SELECT user_id FROM users WHERE user_id=?", (u["referred_by"],)).fetchone()
                 if ref_user:
@@ -347,7 +393,7 @@ def handle_callback(cq):
                     conn.execute("UPDATE users SET referred_by=NULL WHERE user_id=?", (from_id,))
                     conn.commit()
             conn.close()
-            send_message(chat_id, TEXTS[lang]["welcome"], get_main_keyboard(lang))
+            send_message(chat_id, TEXT_WELCOME, get_main_keyboard())
         else:
             send_message(chat_id, "❌ لم تقم بالاشتراك في جميع القنوات بعد!")
 
@@ -361,6 +407,7 @@ def handle_admin_messages(chat_id, text, msg):
         }
         send_message(chat_id, "🛠️ **لوحة تحكم الأدمن:**", admin_kb)
         return True
+
     state = user_steps.get(chat_id)
     if state == "waiting_add_ch":
         user_steps[chat_id] = None
@@ -375,6 +422,7 @@ def handle_admin_messages(chat_id, text, msg):
         else:
             send_message(chat_id, "❌ صيغة غير صحيحة! قم بإرسال: `@ChannelUsername https://t.me/...`")
         return True
+
     elif state == "waiting_del_ch":
         user_steps[chat_id] = None
         conn = get_db()
@@ -383,14 +431,17 @@ def handle_admin_messages(chat_id, text, msg):
         conn.close()
         send_message(chat_id, f"🗑️ تم حذف القناة `{text}` إن وجدت!")
         return True
+
     elif state == "waiting_broadcast":
         user_steps[chat_id] = None
         conn = get_db()
         all_u = conn.execute("SELECT user_id FROM users").fetchall()
         conn.close()
+
         count = 0
         photo = msg.get("photo", [{}])[-1].get("file_id") if "photo" in msg else None
         caption = msg.get("caption") or text
+
         for row in all_u:
             u_id = row["user_id"]
             try:
@@ -403,11 +454,12 @@ def handle_admin_messages(chat_id, text, msg):
                 pass
         send_message(chat_id, f"✅ تم إرسال الإذاعة لـ {count} مستخدم بنجاح!")
         return True
+
     return False
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بنجاح بدون توقف!"
+    return "🤖 البوت يعمل بكفاءة باللغة العربية ونظام التحقق ZORO!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
