@@ -369,14 +369,14 @@ def webhook():
         send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
         return '', 200
 
-    # 3. Main Menu Operations (مع فحص الكلمات المفتاحية لضمان عمل الأزرار تماماً)
+    # 3. Main Menu Operations (مفحوصة بالكلمات المفتاحية)
     if text in ["/start", "الرئيسية", "Main"]:
         send_message(chat_id, t["welcome"], get_main_keyboard(lang))
 
-    elif "مهام" in text or "Tasks" in text:
+    elif any(k in text for k in ["مهام", "Tasks", "Free Tasks"]):
         send_message(chat_id, t["tasks_text"])
 
-    elif "إحالة" in text or "Referral" in text:
+    elif any(k in text for k in ["إحالة", "Referral", "Referral Link"]):
         conn = get_db()
         cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (from_id,)).fetchone()[0]
         conn.close()
@@ -384,7 +384,7 @@ def webhook():
         ref_link = f"https://t.me/{bot_username}?start={from_id}"
         send_message(chat_id, t["ref_text"].format(link=ref_link, count=cnt))
 
-    elif "سحب" in text or "Withdraw" in text:
+    elif any(k in text for k in ["سحب", "Withdraw"]):
         conn = get_db()
         bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
         conn.close()
@@ -394,7 +394,7 @@ def webhook():
             user_steps[from_id] = "waiting_binance_id"
             send_message(chat_id, t["withdraw_prompt"].format(bal=bal))
 
-    elif "لغة" in text or "Language" in text:
+    elif any(k in text for k in ["لغة", "Language", "Change Language"]):
         lang_kb = {
             "inline_keyboard": [
                 [{"text": "🇸🇦 العربية", "callback_data": "set_lang_ar"}, {"text": "🇺🇸 English", "callback_data": "set_lang_en"}]
