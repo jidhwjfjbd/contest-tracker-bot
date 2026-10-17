@@ -12,6 +12,7 @@ BASE_URL = os.getenv("BASE_URL", "https://contest-tracker-bot.onrender.com")
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# استخدام مسار دائم إذا وجد قرص Render، وإلا الملف المحلي
 DB_FILE = "/var/data/bot_database.db" if os.path.exists("/var/data") else "bot_database.db"
 
 # ----------------- Database Setup ----------------- #
@@ -19,7 +20,7 @@ DB_FILE = "/var/data/bot_database.db" if os.path.exists("/var/data") else "bot_d
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Users Table
+    # Users Table with Fingerprint & Verification
     c.execute('''CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
                     balance REAL DEFAULT 0.0,
@@ -287,18 +288,20 @@ def api_verify_device():
         return jsonify({"status": "error", "message": "Invalid Parameters"}), 400
 
     conn = get_db()
+    # التحقق مما إذا كانت البصمة مستخدمة مسبقاً في حساب آخر
     existing = conn.execute("SELECT user_id FROM users WHERE device_fingerprint=? AND user_id!=?", (fp, user_id)).fetchone()
     
     if existing:
         conn.close()
         return jsonify({"status": "error", "message": "⛔ Multi-account detected! Devices can only hold one account."}), 403
 
+    # حفظ بصمة الجهاز وحالة التحقق بشكل دائم
     conn.execute("UPDATE users SET verified=1, device_fingerprint=? WHERE user_id=?", (fp, user_id))
     conn.commit()
     conn.close()
 
     lang = get_user_lang(user_id)
-    send_message(user_id, "✅ **تم التحقق من جهازك بنجاح! يمكنك الآن استخدام البوت.**", get_main_keyboard(lang))
+    send_message(user_id, "✅ **تم التحقق من جهازك بنجاح وحفظ بصمتك! يمكنك الآن استخدام البوت بككامل ميزاته.**", get_main_keyboard(lang))
     return jsonify({"status": "success"})
 
 # ----------------- Webhook Handling ----------------- #
@@ -335,9 +338,9 @@ def webhook():
 
     if not u:
         if ref_id and ref_id != from_id:
-            conn.execute("INSERT OR IGNORE INTO users (user_id, referred_by) VALUES (?, ?)", (from_id, ref_id))
+            conn.execute("INSERT OR IGNORE INTO users (user_id, referred_by, verified) VALUES (?, ?, 0)", (from_id, ref_id))
         else:
-            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (from_id,))
+            conn.execute("INSERT OR IGNORE INTO users (user_id, verified) VALUES (?, 0)", (from_id,))
         conn.commit()
         u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
     conn.close()
@@ -349,7 +352,7 @@ def webhook():
     if from_id == ADMIN_ID and handle_admin_messages(chat_id, text, msg):
         return '', 200
 
-    # 1. Verification Gate (ZORO System)
+    # 1. Verification Gate (ZORO System) - تظهر فقط للمستخدمين الذين لم يتحققوا بعد
     if not u["verified"]:
         verify_markup = {
             "inline_keyboard": [[
@@ -369,7 +372,7 @@ def webhook():
         send_message(chat_id, t["must_sub"], {"inline_keyboard": buttons})
         return '', 200
 
-    # 3. Main Menu Operations (مفحوصة بالكلمات المفتاحية)
+    # 3. Main Menu Operations (تعمل بكفاءة مطلقة بالكلمات المفتاحية للغتين)
     if text in ["/start", "الرئيسية", "Main"]:
         send_message(chat_id, t["welcome"], get_main_keyboard(lang))
 
@@ -514,7 +517,7 @@ def handle_admin_messages(chat_id, text, msg):
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بكفاءة مع نظام ZORO والمهام المجانية!"
+    return "🤖 البوت يعمل بكفاءة مع نظام ZORO وحفظ البصمة الدائم!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
