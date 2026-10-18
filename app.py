@@ -1,49 +1,56 @@
 import os
-import sqlite3
 import logging
-import json
 from flask import Flask, request, jsonify, render_template_string
 import requests
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 TOKEN = os.getenv("BOT_TOKEN", "8938116145:AAHkVV0geUtkdOh04pZgdzQpxL0qVchO6Io")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8557464787"))
 BASE_URL = os.getenv("BASE_URL", "https://contest-tracker-bot.onrender.com")
 
+# رابط Supabase الخاص بك
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "postgresql://postgres.kqiybhwjjlvzytjjpfyj:Iae7UdzXxVaRSRVA@aws-1-eu-central-1.pooler.supabase.com:6543/postgres"
+)
+
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-DB_FILE = "/var/data/bot_database.db" if os.path.exists("/var/data") else "bot_database.db"
-
-# ----------------- Database Setup ----------------- #
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    balance REAL DEFAULT 0.0,
-                    referred_by INTEGER,
-                    verified INTEGER DEFAULT 0,
-                    device_fingerprint TEXT
-                )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS channels (
-                    channel_id TEXT PRIMARY KEY,
-                    invite_link TEXT
-                )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    amount REAL,
-                    binance_id TEXT,
-                    status TEXT DEFAULT 'pending'
-                )''')
-    conn.commit()
-    conn.close()
+# ----------------- Database Setup (Supabase / PostgreSQL) ----------------- #
 
 def get_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+def init_db():
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        balance REAL DEFAULT 0.0,
+                        referred_by BIGINT,
+                        verified INT DEFAULT 0,
+                        device_fingerprint TEXT
+                    )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS channels (
+                        channel_id TEXT PRIMARY KEY,
+                        invite_link TEXT
+                    )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT,
+                        amount REAL,
+                        binance_id TEXT,
+                        status TEXT DEFAULT 'pending'
+                    )''')
+        conn.commit()
+        c.close()
+        conn.close()
+        logging.info("Connected to Supabase DB successfully!")
+    except Exception as e:
+        logging.error(f"Database Init Error: {e}")
 
 init_db()
 user_steps = {}
@@ -67,19 +74,17 @@ def send_message(chat_id, text, reply_markup=None):
         "reply_markup": reply_markup
     })
 
-def send_photo(chat_id, photo, caption="", reply_markup=None):
-    return send_telegram_request("sendPhoto", {
-        "chat_id": chat_id,
-        "photo": photo,
-        "caption": caption,
-        "parse_mode": "Markdown",
-        "reply_markup": reply_markup
-    })
-
 def check_forced_subscriptions(user_id):
-    conn = get_db()
-    channels = conn.execute("SELECT channel_id, invite_link FROM channels").fetchall()
-    conn.close()
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT channel_id, invite_link FROM channels")
+        channels = c.fetchall()
+        c.close()
+        conn.close()
+    except Exception:
+        channels = []
+    
     unsubscribed = []
     for ch in channels:
         res = send_telegram_request("getChatMember", {"chat_id": ch["channel_id"], "user_id": user_id})
@@ -91,7 +96,7 @@ def check_forced_subscriptions(user_id):
             unsubscribed.append(ch)
     return unsubscribed
 
-# ----------------- Texts & Translations (Arabic Only) ----------------- #
+# ----------------- النصوص العربية ----------------- #
 
 TASKS_TEXT = """🎯 **مهمة الربح المجاني المميزة**
 
@@ -128,8 +133,6 @@ def get_main_keyboard():
         ],
         "resize_keyboard": True
     }
-
-# ----------------- Web Application for Verification (ZORO Fingerprint) ----------------- #
 
 ZORO_HTML = """
 <!DOCTYPE html>
@@ -220,18 +223,22 @@ def api_verify_device():
         return jsonify({"status": "error", "message": "معلمات غير صالحة"}), 400
 
     conn = get_db()
-    existing = conn.execute("SELECT user_id FROM users WHERE device_fingerprint=? AND user_id!=?", (fp, user_id)).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE device_fingerprint=%s AND user_id!=%s", (fp, user_id))
+    existing = c.fetchone()
     
     if existing:
+        c.close()
         conn.close()
         return jsonify({"status": "error", "message": "⛔ تم كشف حساب مكرر! يُسمح بحساب واحد فقط لكل جهاز."}), 403
 
-    conn.execute('''
+    c.execute('''
         INSERT INTO users (user_id, verified, device_fingerprint) 
-        VALUES (?, 1, ?) 
-        ON CONFLICT(user_id) DO UPDATE SET verified=1, device_fingerprint=excluded.device_fingerprint
+        VALUES (%s, 1, %s) 
+        ON CONFLICT(user_id) DO UPDATE SET verified=1, device_fingerprint=EXCLUDED.device_fingerprint
     ''', (user_id, fp))
     conn.commit()
+    c.close()
     conn.close()
 
     send_message(user_id, "✅ **تم التحقق من جهازك بنجاح وحفظ بصمتك! يمكنك الآن استخدام البوت بكامل ميزاته.**", get_main_keyboard())
@@ -260,9 +267,10 @@ def webhook():
     text = msg.get("text", "").strip()
 
     conn = get_db()
-    u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id=%s", (from_id,))
+    u = c.fetchone()
     
-    # معالجة رابط الإحالة
     if not u:
         ref_id = None
         if text.startswith("/start") and " " in text:
@@ -271,16 +279,17 @@ def webhook():
                 ref_id = int(parts[1])
         
         if ref_id and ref_id != from_id:
-            conn.execute("INSERT OR IGNORE INTO users (user_id, referred_by, verified) VALUES (?, ?, 0)", (from_id, ref_id))
+            c.execute("INSERT INTO users (user_id, referred_by, verified) VALUES (%s, %s, 0) ON CONFLICT DO NOTHING", (from_id, ref_id))
         else:
-            conn.execute("INSERT OR IGNORE INTO users (user_id, verified) VALUES (?, 0)", (from_id,))
+            c.execute("INSERT INTO users (user_id, verified) VALUES (%s, 0) ON CONFLICT DO NOTHING", (from_id,))
         conn.commit()
-        u = conn.execute("SELECT * FROM users WHERE user_id=?", (from_id,)).fetchone()
+        c.execute("SELECT * FROM users WHERE user_id=%s", (from_id,))
+        u = c.fetchone()
 
     is_verified = u["verified"] if u else 0
+    c.close()
     conn.close()
 
-    # لوحة تحكم الأدمن
     if from_id == ADMIN_ID and handle_admin_messages(chat_id, text, msg):
         return '', 200
 
@@ -306,16 +315,19 @@ def webhook():
 
     # 3. معالجة خطوات طلب السحب
     state = user_steps.get(from_id)
-    
     if isinstance(state, str) and state == "waiting_withdraw_amount":
         try:
             amount = float(text)
             conn = get_db()
-            bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
+            c = conn.cursor()
+            c.execute("SELECT balance FROM users WHERE user_id=%s", (from_id,))
+            bal_row = c.fetchone()
+            bal = bal_row["balance"] if bal_row else 0.0
+            c.close()
             conn.close()
 
             if amount < 0.10:
-                send_message(chat_id, f"❌ **المبلغ المكتوب (${amount:.2f}) أقل من الحد الأدنى للسحب (0.10$)!**\nقم بجمع المزيد من الإحالات والعودة مجدداً.")
+                send_message(chat_id, f"❌ **المبلغ المكتوب (${amount:.2f}) أقل من الحد الأدنى للسحب (0.10$)!**")
                 user_steps[from_id] = None
             elif amount > bal:
                 send_message(chat_id, f"❌ **المبلغ المطلوب (${amount:.2f}) أكثر من رصيدك الحالي (${bal:.2f})!**")
@@ -333,19 +345,23 @@ def webhook():
         user_steps[from_id] = None
 
         conn = get_db()
-        bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
+        c = conn.cursor()
+        c.execute("SELECT balance FROM users WHERE user_id=%s", (from_id,))
+        bal_row = c.fetchone()
+        bal = bal_row["balance"] if bal_row else 0.0
         if bal >= amount and amount >= 0.10:
-            conn.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, from_id))
-            conn.execute("INSERT INTO withdrawals (user_id, amount, binance_id) VALUES (?, ?, ?)", (from_id, amount, binance_id))
+            c.execute("UPDATE users SET balance = balance - %s WHERE user_id=%s", (amount, from_id))
+            c.execute("INSERT INTO withdrawals (user_id, amount, binance_id) VALUES (%s, %s, %s)", (from_id, amount, binance_id))
             conn.commit()
-            send_message(chat_id, f"✅ **تم تسجيل طلب السحب بنجاح!**\n💰 المبلغ: ${amount:.2f}\n🆔 Binance ID: `{binance_id}`\nسيتم مراجعته وإرسال المبلغ قريباً.")
+            send_message(chat_id, f"✅ **تم تسجيل طلب السحب بنجاح!**\n💰 المبلغ: ${amount:.2f}\n🆔 Binance ID: `{binance_id}`")
             send_message(ADMIN_ID, f"📥 **طلب سحب جديد:**\n👤 المستخدم: `{from_id}`\n💰 المبلغ: ${amount:.2f}\n🆔 Binance ID: `{binance_id}`")
         else:
             send_message(chat_id, f"❌ **المبلغ المكتوب (${amount:.2f}) أقل من الحد الأدنى للسحب (0.10$)!**")
+        c.close()
         conn.close()
         return '', 200
 
-    # 4. معالجة الأزرار الرئيسية
+    # 4. الأزرار الرئيسية
     if text in ["/start", "الرئيسية"]:
         user_steps[from_id] = None
         send_message(chat_id, TEXT_WELCOME, get_main_keyboard())
@@ -357,7 +373,10 @@ def webhook():
     elif "إحالة" in text:
         user_steps[from_id] = None
         conn = get_db()
-        cnt = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (from_id,)).fetchone()[0]
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) as count FROM users WHERE referred_by=%s", (from_id,))
+        cnt = c.fetchone()["count"]
+        c.close()
         conn.close()
         bot_res = send_telegram_request('getMe', {}) or {}
         bot_username = bot_res.get('result', {}).get('username', '')
@@ -366,14 +385,16 @@ def webhook():
 
     elif "سحب" in text:
         conn = get_db()
-        bal = conn.execute("SELECT balance FROM users WHERE user_id=?", (from_id,)).fetchone()["balance"]
+        c = conn.cursor()
+        c.execute("SELECT balance FROM users WHERE user_id=%s", (from_id,))
+        bal_row = c.fetchone()
+        bal = bal_row["balance"] if bal_row else 0.0
+        c.close()
         conn.close()
         user_steps[from_id] = "waiting_withdraw_amount"
         send_message(chat_id, f"💰 **رصيدك الحالي:** ${bal:.2f}\n\nالحد الأدنى للسحب هو **0.10$**.\nالرجاء كتابة المبلغ الذي تريد سحبه الآن:")
 
     return '', 200
-
-# ----------------- Callbacks & Admin Control ----------------- #
 
 def handle_callback(cq):
     from_id = cq["from"]["id"]
@@ -384,14 +405,18 @@ def handle_callback(cq):
         unsub = check_forced_subscriptions(from_id)
         if not unsub:
             conn = get_db()
-            u = conn.execute("SELECT referred_by FROM users WHERE user_id=?", (from_id,)).fetchone()
+            c = conn.cursor()
+            c.execute("SELECT referred_by FROM users WHERE user_id=%s", (from_id,))
+            u = c.fetchone()
             if u and u["referred_by"]:
-                ref_user = conn.execute("SELECT user_id FROM users WHERE user_id=?", (u["referred_by"],)).fetchone()
+                c.execute("SELECT user_id FROM users WHERE user_id=%s", (u["referred_by"],))
+                ref_user = c.fetchone()
                 if ref_user:
-                    conn.execute("UPDATE users SET balance = balance + 0.01 WHERE user_id=?", (u["referred_by"],))
+                    c.execute("UPDATE users SET balance = balance + 0.01 WHERE user_id=%s", (u["referred_by"],))
                     send_message(u["referred_by"], "🎉 **لقد حصلت على 0.01$ لإحالة مستخدم جديد!**")
-                    conn.execute("UPDATE users SET referred_by=NULL WHERE user_id=?", (from_id,))
+                    c.execute("UPDATE users SET referred_by=NULL WHERE user_id=%s", (from_id,))
                     conn.commit()
+            c.close()
             conn.close()
             send_message(chat_id, TEXT_WELCOME, get_main_keyboard())
         else:
@@ -401,65 +426,16 @@ def handle_admin_messages(chat_id, text, msg):
     if text in ["/admin", "لوحة الأدمن"]:
         admin_kb = {
             "inline_keyboard": [
-                [{"text": "➕ إضافة قناة اشتراك", "callback_data": "adm_add_ch"}, {"text": "➖ حذف قناة اشتراك", "callback_data": "adm_del_ch"}],
-                [{"text": "📢 إذاعة جماعية (متطورة)", "callback_data": "adm_broadcast"}]
+                [{"text": "➕ إضافة قناة اشتراك", "callback_data": "adm_add_ch"}, {"text": "➖ حذف قناة اشتراك", "callback_data": "adm_del_ch"}]
             ]
         }
         send_message(chat_id, "🛠️ **لوحة تحكم الأدمن:**", admin_kb)
         return True
-
-    state = user_steps.get(chat_id)
-    if state == "waiting_add_ch":
-        user_steps[chat_id] = None
-        parts = text.split()
-        if len(parts) >= 2:
-            ch_id, ch_link = parts[0], parts[1]
-            conn = get_db()
-            conn.execute("INSERT OR REPLACE INTO channels (channel_id, invite_link) VALUES (?, ?)", (ch_id, ch_link))
-            conn.commit()
-            conn.close()
-            send_message(chat_id, f"✅ تم إضافة القناة `{ch_id}` بنجاح!")
-        else:
-            send_message(chat_id, "❌ صيغة غير صحيحة! قم بإرسال: `@ChannelUsername https://t.me/...`")
-        return True
-
-    elif state == "waiting_del_ch":
-        user_steps[chat_id] = None
-        conn = get_db()
-        conn.execute("DELETE FROM channels WHERE channel_id=?", (text.strip(),))
-        conn.commit()
-        conn.close()
-        send_message(chat_id, f"🗑️ تم حذف القناة `{text}` إن وجدت!")
-        return True
-
-    elif state == "waiting_broadcast":
-        user_steps[chat_id] = None
-        conn = get_db()
-        all_u = conn.execute("SELECT user_id FROM users").fetchall()
-        conn.close()
-
-        count = 0
-        photo = msg.get("photo", [{}])[-1].get("file_id") if "photo" in msg else None
-        caption = msg.get("caption") or text
-
-        for row in all_u:
-            u_id = row["user_id"]
-            try:
-                if photo:
-                    send_photo(u_id, photo, caption)
-                else:
-                    send_message(u_id, caption)
-                count += 1
-            except Exception:
-                pass
-        send_message(chat_id, f"✅ تم إرسال الإذاعة لـ {count} مستخدم بنجاح!")
-        return True
-
     return False
 
 @app.route('/')
 def index():
-    return "🤖 البوت يعمل بكفاءة باللغة العربية ونظام التحقق ZORO!"
+    return "🤖 البوت يعمل بكفاءة ودقة مع قاعدة البيانات السحابية Supabase!"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
